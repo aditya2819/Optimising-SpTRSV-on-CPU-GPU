@@ -1,0 +1,36 @@
+GPU New Real Matrix Sweep
+Preprocessing: Matrix Market -> lower triangular CSR with strengthened diagonal
+GPU device : NVIDIA H200 (compute capability 9.0)
+
+Family            Matrix              N         NNZ         AutoFam       AutoKern      FamilyAware     LearnedAware    cuSPARSE        Ratio           
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+random_irregular  ASIC_100k           99340     526789      random        RandomAware   132.3013        7.9293          39.5471         0.2005          
+banded            LFAT5000            19994     49980       banded        RegularAware  12.2414         8.8966          26.0310         0.3418          
+chain_like        poli                4008      4348        power-law     PowerLawAware 0.3971          0.3319          1.3473          0.2463          
+wide_level        web-Stanford        281903    1413271     random        RandomAware   16.1258         22.3720         20.1158         1.1122          
+block_structured  circuit204          1020      3795        power-law     PowerLawAware 0.4822          0.3979          1.4608          0.2724          
+power_law         soc-sign-epinions   131828    593597      random        RandomAware   12.3495         17.0678         18.4017         0.9275          
+extra             msc04515            4515      51111       random        RandomAware   1.9762          3.6171          3.2917          1.0989          
+extra             pwtk                217918    5926171     block         RowBucketed   221.3773        354.8836        954.6821        0.3717          
+extra             helm2d03            392257    1567096     power-law     PowerLawAware 10.0899         13.0228         4.8076          2.7088          
+extra             apache1             80800     311492      regular       RegularAware  52.6556         42.6907         3.6059          11.8392         
+extra             bcsstk13            2003      42943       block         RowBucketed   2.8993          3.0855          5.8486          0.5276          
+extra             bcsstk14            1806      32630       random        RandomAware   2.4986          1.7918          4.2466          0.4219          
+extra             bcsstk17            10974     219812      random        RandomAware   8.3005          15.6799         12.7534         1.2295          
+extra             bcsstk18            11948     80519       random        RandomAware   3.0745          14.3284         3.8493          3.7223          
+extra             bcsstk27            1224      28675       random        RandomAware   2.7384          1.2094          4.6180          0.2619          
+extra             bcsstm22            138       138         chain         RowBucketed   0.2479          0.2196          1.2098          0.1815          
+extra             scircuit            170998    565030      power-law     PowerLawAware 19.8130         21.8573         10.9574         1.9948          
+extra             fv1                 9604      47434       regular       RegularAware  6.6206          7.0630          2.8581          2.4712          
+extra             fv2                 9801      48413       regular       RegularAware  6.7372          7.1956          2.9015          2.4800          
+extra             fv3                 9801      48413       regular       RegularAware  6.7266          7.1782          2.8844          2.4886          
+extra             EPA                 4772      7138        power-law     PowerLawAware 0.4676          0.4592          1.3218          0.3474          
+extra             ca-GrQc             5242      19726       power-law     PowerLawAware 1.0866          1.1582          1.6683          0.6942          
+extra             email-Enron         36692     220523      random        RandomAware   5.7692          9.1608          12.7828         0.7166          
+extra             soc-Epinions1       75888     363549      random        RandomAware   7.6815          10.9054         13.0609         0.8350          
+extra             roadNet-CA          1971281   4737888     random        RandomAware   75.0461         105.3791        15.5766         6.7652          
+extra             wiki-Vote           8297      40953       random        RandomAware   2.3124          3.0725          3.4842          0.8818          
+extra             ASIC_680k           682862    2277355     power-law     PowerLawAware 17.1785         22.5580         92.3033         0.2444          
+very_large        web-BerkStan        685230    4425244     random        RandomAware   55.7634         92.7318         121.2943        0.7645          
+very_large        roadNet-TX          1393383   3315043     random        RandomAware   53.6430         74.4515         10.8309         6.8740          
+very_large        wiki-Talk           2394385   3072221     power-law     PowerLawAware 46.9598         60.1150         44.7064         1.3447          

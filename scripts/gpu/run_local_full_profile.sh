@@ -1,0 +1,96 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+BUILD_DIR="${REPO_ROOT}/build/gpu"
+BINARY="${BUILD_DIR}/sptrsv_bench"
+RESULT_DIR="${RESULT_DIR:-${REPO_ROOT}/results/generated/gpu/local_profile}"
+
+mkdir -p "${RESULT_DIR}"
+cd "${REPO_ROOT}"
+
+rm -rf \
+  "${RESULT_DIR}/gpu_real_all_kernels.txt" \
+  "${RESULT_DIR}/nsys_gpu_real_all_summary.txt" \
+  "${RESULT_DIR}/run_status.log"
+rm -f "${RESULT_DIR}"/nsys_real_*.sqlite "${RESULT_DIR}"/nsys_real_*.nsys-rep
+
+"${SCRIPT_DIR}/run_benchmark.sh" real-one ASIC_100k learnedaware > /dev/null
+
+modes=(
+  coalesced
+  rowbucketed
+  levelaware
+  randomaware
+  powerlawaware
+  blockaware
+  bandedaware
+  regularaware
+  familyaware
+  learnedaware
+  cusparse
+)
+
+matrices=(
+  ASIC_100k
+  LFAT5000
+  poli
+  web-Stanford
+  circuit204
+  soc-sign-epinions
+  msc04515
+  pwtk
+  helm2d03
+  apache1
+  bcsstk13
+  bcsstk14
+  bcsstk17
+  bcsstk18
+  bcsstk27
+  bcsstm22
+  scircuit
+  fv1
+  fv2
+  fv3
+  EPA
+  ca-GrQc
+  email-Enron
+  soc-Epinions1
+  roadNet-CA
+  wiki-Vote
+  ASIC_680k
+  web-BerkStan
+  roadNet-TX
+  wiki-Talk
+)
+
+for mode in "${modes[@]}"; do
+  for matrix in "${matrices[@]}"; do
+    safe_mode=$(echo "${mode}" | tr '-' '_')
+    safe_matrix=$(echo "${matrix}" | tr '-' '_')
+
+    {
+      echo "===== ${matrix} | ${mode} ====="
+      "${BINARY}" real-one "${matrix}" "${mode}"
+      echo
+    } >> "${RESULT_DIR}/gpu_real_all_kernels.txt" 2>&1
+
+    nsys profile \
+      --force-overwrite true \
+      --stats=true \
+      --trace=cuda,nvtx,osrt \
+      --sample=none \
+      -o "${RESULT_DIR}/nsys_real_${safe_matrix}_${safe_mode}" \
+      "${BINARY}" real-one "${matrix}" "${mode}" > /dev/null 2>&1
+
+    {
+      echo "===== ${matrix} | ${mode} ====="
+      nsys stats --force-export=true --report cuda_api_sum,osrt_sum \
+        "${RESULT_DIR}/nsys_real_${safe_matrix}_${safe_mode}.nsys-rep"
+      echo
+    } >> "${RESULT_DIR}/nsys_gpu_real_all_summary.txt" 2>&1
+  done
+done
+
+echo "Done." >> "${RESULT_DIR}/run_status.log"

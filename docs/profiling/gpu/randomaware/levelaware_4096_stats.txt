@@ -1,0 +1,16 @@
+Generating SQLite file profiling/randomaware/levelaware_4096.sqlite from profiling/randomaware/levelaware_4096.nsys-rep
+Processing [profiling/randomaware/levelaware_4096.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/cuda_api_sum.py]... 
+
+ ** CUDA API Summary (cuda_api_sum):
+
+ Time (%)  Total Time (ns)  Num Calls  Avg (ns)   Med (ns)  Min (ns)  Max (ns)   StdDev (ns)                Name               
+ --------  ---------------  ---------  ---------  --------  --------  ---------  -----------  ---------------------------------
+     82.8        192061485        166  1156996.9    1743.0      1087  191606691   14871350.2  cudaMalloc                       
+     13.5         31322001        166   188686.8  192829.5      1619     753303     173137.9  cudaFree                         
+      1.7          4038277        166    24327.0    6760.0      4737    1568012     125951.8  cudaMemcpy                       
+      1.6          3718090        161    23093.7    6700.0      3971    2464357     193652.5  cudaLaunchKernel                 
+      0.3           675153          1   675153.0  675153.0    675153     675153          0.0  cudaMemset                       
+      0.1           119219         95     1254.9     919.0       459       5061        994.1  cudaDeviceSynchronize            
+      0.0             2594          1     2594.0    2594.0      2594       2594          0.0  cudaGetDeviceProperties_v2_v12000
+      0.0              692          1      692.0     692.0       692        692          0.0  cuModuleGetLoadingMode           
+

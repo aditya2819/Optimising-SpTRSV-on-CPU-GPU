@@ -1,0 +1,19 @@
+Generating SQLite file profiling/powerlawaware_final/powerlawaware_32768.sqlite from profiling/powerlawaware_final/powerlawaware_32768.nsys-rep
+Processing [profiling/powerlawaware_final/powerlawaware_32768.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/cuda_api_sum.py]... 
+
+ ** CUDA API Summary (cuda_api_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)   Med (ns)   Min (ns)  Max (ns)   StdDev (ns)                Name               
+ --------  ---------------  ---------  ----------  ---------  --------  ---------  -----------  ---------------------------------
+     72.6        184202381          7  26314625.9     5359.0      1192  183546537   69332918.6  cudaMalloc                       
+     15.5         39350150        724     54351.0    28013.5      1410    5988882     278020.3  cudaStreamSynchronize            
+      6.0         15206837          5   3041367.4  1493411.0    249109    8156676    3460995.6  cudaMemcpy                       
+      2.5          6374168        775      8224.7     5971.0      3084    1357712      48674.9  cudaLaunchKernel                 
+      2.4          6148237        775      7933.2     5250.0      2896     721903      28431.4  cudaMemcpyAsync                  
+      0.3           839538          1    839538.0   839538.0    839538     839538          0.0  cudaMemset                       
+      0.3           773780          1    773780.0   773780.0    773780     773780          0.0  cudaStreamCreate                 
+      0.3           730903          7    104414.7    10564.0      1300     280281     128530.7  cudaFree                         
+      0.0             5457          1      5457.0     5457.0      5457       5457          0.0  cudaStreamDestroy                
+      0.0             3072          1      3072.0     3072.0      3072       3072          0.0  cudaGetDeviceProperties_v2_v12000
+      0.0              779          1       779.0      779.0       779        779          0.0  cuModuleGetLoadingMode           
+

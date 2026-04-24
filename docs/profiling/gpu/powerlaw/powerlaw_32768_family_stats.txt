@@ -1,0 +1,53 @@
+Generating SQLite file profiling/powerlaw/powerlaw_32768_family.sqlite from profiling/powerlaw/powerlaw_32768_family.nsys-rep
+Processing [profiling/powerlaw/powerlaw_32768_family.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/cuda_api_sum.py]... 
+
+ ** CUDA API Summary (cuda_api_sum):
+
+ Time (%)  Total Time (ns)  Num Calls  Avg (ns)   Med (ns)  Min (ns)  Max (ns)   StdDev (ns)                Name               
+ --------  ---------------  ---------  ---------  --------  --------  ---------  -----------  ---------------------------------
+     48.2        195538844      12487    15659.4    2884.0      2551   65896146     612147.5  cudaLaunchKernel                 
+     25.9        105094680         73  1439653.2    1744.0      1115  101120516   11829692.7  cudaMalloc                       
+     23.0         93383402         26  3591669.3     537.5       439   88703780   17382950.8  cudaDeviceSynchronize            
+      1.5          6104214         74    82489.4   23668.5      1253    1785168     222977.3  cudaFree                         
+      0.9          3629830         69    52606.2    5783.0      4737     281186      72433.6  cudaMemcpy                       
+      0.2           630250         43    14657.0    7836.0      2857     195470      32555.6  cudaMemcpyAsync                  
+      0.1           232129          1   232129.0  232129.0    232129     232129          0.0  cudaStreamSynchronize            
+      0.0           180410          1   180410.0  180410.0    180410     180410          0.0  cudaLaunchCooperativeKernel      
+      0.0           161794          5    32358.8   32928.0     21978      42572       7681.0  cudaMemset                       
+      0.0           151315         42     3602.7    3529.0      2033       9940       1524.6  cudaEventRecord                  
+      0.0            82026          4    20506.5   19890.5      6671      35574      13060.5  cudaMemsetAsync                  
+      0.0            49825        419      118.9      90.0        50       3323        172.5  cuGetProcAddress_v2              
+      0.0            36230         78      464.5     375.0       336       2695        282.4  cudaStreamWaitEvent              
+      0.0            18481          3     6160.3     895.0       667      16919       9318.0  cudaStreamCreate                 
+      0.0             4437          3     1479.0     897.0       503       3037       1363.6  cudaStreamDestroy                
+      0.0             4305          3     1435.0     413.0       282       3610       1884.7  cudaEventCreateWithFlags         
+      0.0             2749          2     1374.5    1374.5      1059       1690        446.2  cudaGetDeviceProperties_v2_v12000
+      0.0             1928          3      642.7     269.0       230       1429        681.3  cudaEventDestroy                 
+      0.0             1436          1     1436.0    1436.0      1436       1436          0.0  cuInit                           
+      0.0              942          2      471.0     471.0        70        872        567.1  cuModuleGetLoadingMode           
+
+Processing [profiling/powerlaw/powerlaw_32768_family.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/osrt_sum.py]... 
+
+ ** OS Runtime Summary (osrt_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)    Med (ns)   Min (ns)  Max (ns)   StdDev (ns)           Name         
+ --------  ---------------  ---------  ----------  ----------  --------  ---------  -----------  ----------------------
+     75.8        716153042         12  59679420.2  79304173.5      2180  102959628   46448505.3  poll                  
+     16.2        153525022       2659     57737.9      2144.0       998    5130942     329853.1  ioctl                 
+      7.4         69786143          4  17446535.8  14063928.5    735838   40922448   19847611.5  fread                 
+      0.3          2993840         30     99794.7      5313.5      1215     979368     288345.3  fopen                 
+      0.1           604065          5    120813.0     75531.0     49812     320148     112217.8  sem_timedwait         
+      0.1           581918          4    145479.5    116919.5     88991     259088      78080.5  pthread_create        
+      0.1           576130          1    576130.0    576130.0    576130     576130          0.0  pthread_join          
+      0.0           384901          6     64150.2      9777.5      1157     342465     136620.5  fclose                
+      0.0           353749         22     16079.5     11211.5      1471      80437      17109.6  mmap                  
+      0.0            99401          1     99401.0     99401.0     99401      99401          0.0  pthread_cond_wait     
+      0.0            64941          4     16235.3     15504.0     14691      19242       2080.1  write                 
+      0.0            41186          4     10296.5      5559.0      2037      28031      11994.9  pipe2                 
+      0.0            22481          1     22481.0     22481.0     22481      22481          0.0  fgets                 
+      0.0            20429          4      5107.3      1371.0      1243      16444       7558.1  pthread_cond_broadcast
+      0.0            19094          3      6364.7      5028.0      4441       9625       2838.7  open                  
+      0.0             6481          4      1620.3      1636.0      1141       2068        508.8  fwrite                
+      0.0             5863          4      1465.8      1408.5      1221       1825        255.8  read                  
+      0.0             1222          1      1222.0      1222.0      1222       1222          0.0  fcntl                 
+

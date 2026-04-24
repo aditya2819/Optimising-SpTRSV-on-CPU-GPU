@@ -1,0 +1,45 @@
+Generating SQLite file profiling/randomaware_gap/cusparse_32768.sqlite from profiling/randomaware_gap/cusparse_32768.nsys-rep
+Processing [profiling/randomaware_gap/cusparse_32768.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/cuda_api_sum.py]... 
+
+ ** CUDA API Summary (cuda_api_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)    Med (ns)   Min (ns)  Max (ns)   StdDev (ns)                Name               
+ --------  ---------------  ---------  ----------  ----------  --------  ---------  -----------  ---------------------------------
+     82.7        351004476          7  50143496.6    203627.0      2495  349908278  132183932.3  cudaFree                         
+      8.9         37909740         10   3790974.0     32644.0      7232   21721575    8036353.0  cudaLaunchKernel                 
+      5.1         21700393          1  21700393.0  21700393.0  21700393   21700393          0.0  cudaMemcpyAsync                  
+      2.1          9092311          5   1818462.2    129821.0     51609    4405305    2356991.3  cudaMemcpy                       
+      0.6          2418481          1   2418481.0   2418481.0   2418481    2418481          0.0  cudaDeviceSynchronize            
+      0.4          1752134          6    292022.3    333931.0      4670     631318     247682.6  cudaMalloc                       
+      0.0           211596          1    211596.0    211596.0    211596     211596          0.0  cudaLaunchCooperativeKernel      
+      0.0            90808          4     22702.0     22763.0      6314      38968      17456.1  cudaMemsetAsync                  
+      0.0            56559        419       135.0        96.0        51       3669        193.1  cuGetProcAddress_v2              
+      0.0            38144          1     38144.0     38144.0     38144      38144          0.0  cudaMemset                       
+      0.0             7189          2      3594.5      3594.5      3568       3621         37.5  cudaGetDeviceProperties_v2_v12000
+      0.0             1863          1      1863.0      1863.0      1863       1863          0.0  cuInit                           
+      0.0             1196          2       598.0       598.0        96       1100        709.9  cuModuleGetLoadingMode           
+
+Processing [profiling/randomaware_gap/cusparse_32768.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/osrt_sum.py]... 
+
+ ** OS Runtime Summary (osrt_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)    Med (ns)   Min (ns)  Max (ns)   StdDev (ns)           Name         
+ --------  ---------------  ---------  ----------  ----------  --------  ---------  -----------  ----------------------
+     73.9        610695746         12  50891312.2  45280401.0      1062  102419666   47292788.1  poll                  
+     16.1        133366569        566    235630.0      8193.0      1004   10910335     934388.4  ioctl                 
+      9.2         76254764          4  19063691.0  13724701.0    295168   48510194   23043846.6  fread                 
+      0.3          2270533         30     75684.4      3340.5      1105     969533     232406.9  fopen                 
+      0.1          1169441          4    292360.3    223802.5    115419     606417     220257.0  pthread_create        
+      0.1           979741          5    195948.2    164046.0     71128     395898     128691.6  sem_timedwait         
+      0.1           544065          1    544065.0    544065.0    544065     544065          0.0  pthread_join          
+      0.0           379136         22     17233.5     17282.0      3629      31331       8822.3  mmap                  
+      0.0           341264         11     31024.0      1598.0      1003     306399      91435.8  fclose                
+      0.0            68422          4     17105.5     17512.0     12349      21049       3826.7  write                 
+      0.0            59766          4     14941.5      8049.0      1331      42337      18545.2  pipe2                 
+      0.0            25586          1     25586.0     25586.0     25586      25586          0.0  fgets                 
+      0.0            22603          3      7534.3      7043.0      5209      10351       2606.0  open                  
+      0.0            17993          3      5997.7      3648.0      1350      12995       6167.8  fwrite                
+      0.0             9486          5      1897.2      1788.0      1341       2393        424.2  read                  
+      0.0             6896          4      1724.0      1277.0      1141       3201        990.0  pthread_cond_broadcast
+      0.0             5201          3      1733.7      1305.0      1146       2750        883.8  fcntl                 
+

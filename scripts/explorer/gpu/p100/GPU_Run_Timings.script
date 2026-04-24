@@ -1,0 +1,30 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --job-name=GPUTimings
+#SBATCH --partition=courses-gpu
+#SBATCH --gres=gpu:p100:1
+#SBATCH --output=gpu_timings_%j.out
+#SBATCH --error=gpu_timings_%j.err
+
+set -euo pipefail
+
+module load cuda/12.8
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../../../.." && pwd)"
+RESULT_DIR="${RESULT_DIR:-$SLURM_SUBMIT_DIR}"
+
+mkdir -p "$RESULT_DIR"
+cd "$REPO_ROOT"
+export CUDA_ARCH=60
+
+rm -f \
+  "$RESULT_DIR/gpu_learned_vs_cusparse_synthetic.txt" \
+  "$RESULT_DIR/gpu_learned_vs_cusparse_real.txt"
+
+"$REPO_ROOT/scripts/gpu/run_benchmark.sh" families > "$RESULT_DIR/gpu_learned_vs_cusparse_synthetic.txt"
+"$REPO_ROOT/scripts/gpu/run_benchmark.sh" real > "$RESULT_DIR/gpu_learned_vs_cusparse_real.txt"
+
+echo "Done."
+echo "GPU synthetic sweep: $RESULT_DIR/gpu_learned_vs_cusparse_synthetic.txt"
+echo "GPU real sweep:      $RESULT_DIR/gpu_learned_vs_cusparse_real.txt"

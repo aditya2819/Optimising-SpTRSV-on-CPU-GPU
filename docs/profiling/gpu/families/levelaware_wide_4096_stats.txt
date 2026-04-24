@@ -1,0 +1,46 @@
+Generating SQLite file profiling/families/levelaware_wide_4096.sqlite from profiling/families/levelaware_wide_4096.nsys-rep
+Processing [profiling/families/levelaware_wide_4096.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/cuda_api_sum.py]... 
+
+ ** CUDA API Summary (cuda_api_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)    Med (ns)   Min (ns)  Max (ns)   StdDev (ns)                Name               
+ --------  ---------------  ---------  ----------  ----------  --------  ---------  -----------  ---------------------------------
+     72.0        450398646         54   8340715.7      2705.5      1111  447065387   60829761.0  cudaMalloc                       
+     11.4         71359738         36   1982214.9      1579.0      1107   43369491    8460783.3  cudaDeviceSynchronize            
+      7.7         48212244         47   1025792.4     17770.0      5767   28551774    4786072.2  cudaLaunchKernel                 
+      3.3         20850434          1  20850434.0  20850434.0  20850434   20850434          0.0  cudaMemcpyAsync                  
+      3.3         20638012         55    375236.6    374334.0      1477    2479634     393590.1  cudaFree                         
+      2.1         13367015         53    252207.8     25927.0      7105    3312839     612157.6  cudaMemcpy                       
+      0.0           227445          4     56861.3     12632.0      3410     198771      94753.4  cudaMemsetAsync                  
+      0.0           151487          1    151487.0    151487.0    151487     151487          0.0  cudaLaunchCooperativeKernel      
+      0.0           143601          4     35900.3     37966.0     26901      40768       6216.6  cudaMemset                       
+      0.0            70604        419       168.5       100.0        56      10243        596.7  cuGetProcAddress_v2              
+      0.0             3552          1      3552.0      3552.0      3552       3552          0.0  cuInit                           
+      0.0             3472          2      1736.0      1736.0       845       2627       1260.1  cudaGetDeviceProperties_v2_v12000
+      0.0             1238          2       619.0       619.0       113       1125        715.6  cuModuleGetLoadingMode           
+
+Processing [profiling/families/levelaware_wide_4096.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/osrt_sum.py]... 
+
+ ** OS Runtime Summary (osrt_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)    Med (ns)   Min (ns)  Max (ns)   StdDev (ns)           Name         
+ --------  ---------------  ---------  ----------  ----------  --------  ---------  -----------  ----------------------
+     75.2        920257322         15  61350488.1  95320760.0      1175  102946861   45210842.0  poll                  
+     19.5        238671176        653    365499.5      8335.0      1005   20838279    1782123.8  ioctl                 
+      4.7         57603847          4  14400961.8  13626171.5    434167   29917337   15792045.7  fread                 
+      0.2          1992741         31     64282.0      3284.0      1018     759426     186415.1  fopen                 
+      0.1          1341939         22     60997.2     13694.5      3426     996051     209281.3  mmap                  
+      0.1           882475          5    176495.0     85985.0     67098     533360     200722.7  sem_timedwait         
+      0.1           759316          1    759316.0    759316.0    759316     759316          0.0  pthread_join          
+      0.0           592210          4    148052.5    147676.0    103569     193289      36756.4  pthread_create        
+      0.0           520207          8     65025.9      1835.5      1133     456230     158680.3  fclose                
+      0.0           162341          1    162341.0    162341.0    162341     162341          0.0  pthread_cond_wait     
+      0.0            72642          4     18160.5     16797.0     16022      23026       3294.3  write                 
+      0.0            30521          2     15260.5     15260.5      1274      29247      19779.9  fgets                 
+      0.0            28263          4      7065.8      5772.0      1534      15185       5774.5  pipe2                 
+      0.0            16902          4      4225.5      1589.0      1109      12615       5604.8  pthread_cond_broadcast
+      0.0            16204          3      5401.3      4219.0      3549       8436       2649.4  open                  
+      0.0             8256          3      2752.0      2741.0      2058       3457        699.6  fwrite                
+      0.0             6451          3      2150.3      2468.0      1499       2484        564.1  read                  
+      0.0             4767          4      1191.8      1153.5      1111       1349        106.7  fcntl                 
+

@@ -1,0 +1,45 @@
+Generating SQLite file profiling/powerlawaware_gap/cusparse_32768.sqlite from profiling/powerlawaware_gap/cusparse_32768.nsys-rep
+Processing [profiling/powerlawaware_gap/cusparse_32768.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/cuda_api_sum.py]... 
+
+ ** CUDA API Summary (cuda_api_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)    Med (ns)   Min (ns)  Max (ns)   StdDev (ns)                Name               
+ --------  ---------------  ---------  ----------  ----------  --------  ---------  -----------  ---------------------------------
+     67.3        206940422          7  29562917.4    167275.0      3734  205867184   77743068.3  cudaFree                         
+     15.9         48762798         10   4876279.8     42219.0      7833   30535429   10601760.9  cudaLaunchKernel                 
+      8.5         26118227          5   5223645.4    304994.0     57982   21292614    9158765.8  cudaMemcpy                       
+      6.8         21034122          1  21034122.0  21034122.0  21034122   21034122          0.0  cudaMemcpyAsync                  
+      0.8          2588807          1   2588807.0   2588807.0   2588807    2588807          0.0  cudaDeviceSynchronize            
+      0.5          1632177          6    272029.5    345588.5      5275     508905     215019.2  cudaMalloc                       
+      0.1           243429          1    243429.0    243429.0    243429     243429          0.0  cudaLaunchCooperativeKernel      
+      0.0            99068          4     24767.0     23674.0      6776      44944      19288.2  cudaMemsetAsync                  
+      0.0            75594        419       180.4        91.0        52      21492       1058.5  cuGetProcAddress_v2              
+      0.0            43591          1     43591.0     43591.0     43591      43591          0.0  cudaMemset                       
+      0.0             6300          2      3150.0      3150.0      3128       3172         31.1  cudaGetDeviceProperties_v2_v12000
+      0.0             2464          1      2464.0      2464.0      2464       2464          0.0  cuInit                           
+      0.0             2371          2      1185.5      1185.5        82       2289       1560.6  cuModuleGetLoadingMode           
+
+Processing [profiling/powerlawaware_gap/cusparse_32768.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/osrt_sum.py]... 
+
+ ** OS Runtime Summary (osrt_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)    Med (ns)   Min (ns)  Max (ns)   StdDev (ns)           Name         
+ --------  ---------------  ---------  ----------  ----------  --------  ---------  -----------  ----------------------
+     72.7        616813722         12  51401143.5  38570998.0      1055  103404995   44740252.1  poll                  
+     16.6        141139457        578    244185.9      5683.5      1002   14958840    1159626.0  ioctl                 
+      9.7         82557058          4  20639264.5  20669510.5    918491   40299546   22465649.7  fread                 
+      0.6          4954749         30    165158.3      3115.5      1160    2941186     580799.6  fopen                 
+      0.1           866783          5    173356.6     64034.0     48209     570261     224452.9  sem_timedwait         
+      0.1           530770          4    132692.5    133711.0    112865     150483      19271.7  pthread_create        
+      0.1           483710          1    483710.0    483710.0    483710     483710          0.0  pthread_join          
+      0.1           436284          9     48476.0      1593.0      1084     387458     127364.9  fclose                
+      0.0           420921         22     19132.8      9361.5      3779      57434      20083.7  mmap                  
+      0.0            74324          5     14864.8     17237.0      1129      25065       8788.8  write                 
+      0.0            30704          4      7676.0      6791.5      2350      14771       5698.3  pipe2                 
+      0.0            29276          4      7319.0      1266.0      1179      25565      12164.2  pthread_cond_broadcast
+      0.0            24224          1     24224.0     24224.0     24224      24224          0.0  fgets                 
+      0.0            19961          3      6653.7      5662.0      4404       9895       2876.7  open                  
+      0.0            15174          3      5058.0      1453.0      1381      12340       6306.5  fwrite                
+      0.0             5580          3      1860.0      1280.0      1152       3148       1117.3  read                  
+      0.0             1124          1      1124.0      1124.0      1124       1124          0.0  fcntl                 
+

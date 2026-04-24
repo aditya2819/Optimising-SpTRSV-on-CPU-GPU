@@ -1,0 +1,37 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --time=4:00:00
+#SBATCH --job-name=CPUKernelRun
+#SBATCH --partition=courses
+#SBATCH --output=cpu_kernel_run_%j.out
+#SBATCH --error=cpu_kernel_run_%j.err
+
+set -euo pipefail
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)"
+BASE_RESULT_DIR="${RESULT_DIR:-$SLURM_SUBMIT_DIR}"
+VTUNE_RESULT_DIR="$BASE_RESULT_DIR/vtune_profiles"
+
+mkdir -p "$BASE_RESULT_DIR"
+cd "$REPO_ROOT"
+
+# Use Explorer's VTune CLI from PATH by default.
+export VTUNE_BIN="${VTUNE_BIN:-vtune}"
+export ITERS="${ITERS:-500}"
+export RESULT_DIR="$VTUNE_RESULT_DIR"
+
+rm -rf \
+  "$BASE_RESULT_DIR/real_sweep_solve_only_table.txt" \
+  "$BASE_RESULT_DIR/synthetic_solve_only_table.txt" \
+  "$VTUNE_RESULT_DIR"
+
+"$REPO_ROOT/scripts/cpu/run_benchmark.sh" real > "$BASE_RESULT_DIR/real_sweep_solve_only_table.txt"
+"$REPO_ROOT/scripts/cpu/run_benchmark.sh" families > "$BASE_RESULT_DIR/synthetic_solve_only_table.txt"
+
+"$REPO_ROOT/scripts/cpu/run_vtune_per_kernel_profiles.sh" web-Stanford
+
+echo "Done."
+echo "CPU real sweep:      $BASE_RESULT_DIR/real_sweep_solve_only_table.txt"
+echo "CPU synthetic sweep: $BASE_RESULT_DIR/synthetic_solve_only_table.txt"
+echo "CPU VTune outputs:   $VTUNE_RESULT_DIR/"

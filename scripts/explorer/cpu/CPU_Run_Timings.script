@@ -1,0 +1,27 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --time=4:00:00
+#SBATCH --job-name=CPUTimings
+#SBATCH --partition=courses
+#SBATCH --output=cpu_timings_%j.out
+#SBATCH --error=cpu_timings_%j.err
+
+set -euo pipefail
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)"
+RESULT_DIR="${RESULT_DIR:-$SLURM_SUBMIT_DIR}"
+
+mkdir -p "$RESULT_DIR"
+cd "$REPO_ROOT"
+
+rm -f \
+  "$RESULT_DIR/real_sweep_solve_only_table.txt" \
+  "$RESULT_DIR/synthetic_solve_only_table.txt"
+
+"$REPO_ROOT/scripts/cpu/run_benchmark.sh" real > "$RESULT_DIR/real_sweep_solve_only_table.txt"
+"$REPO_ROOT/scripts/cpu/run_benchmark.sh" families > "$RESULT_DIR/synthetic_solve_only_table.txt"
+
+echo "Done."
+echo "CPU real sweep:      $RESULT_DIR/real_sweep_solve_only_table.txt"
+echo "CPU synthetic sweep: $RESULT_DIR/synthetic_solve_only_table.txt"

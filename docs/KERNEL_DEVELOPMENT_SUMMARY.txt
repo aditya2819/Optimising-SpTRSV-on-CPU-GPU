@@ -1,0 +1,736 @@
+Kernel Development Summary
+==========================
+
+Purpose
+-------
+This document summarizes the kernel-development path on both CPU and GPU:
+- what kernel was added
+- what profiling or benchmark signal motivated it
+- what decision was taken next
+
+The focus is on the reasoning trail from baseline to final active kernels.
+
+
+CPU Side
+========
+
+CPU Goal
+--------
+Build a clean sparse triangular solve benchmark that compares custom CPU kernels
+against MKL, while keeping the timed region focused on the solve call itself.
+
+Initial baseline
+----------------
+Kernel:
+- Basic
+
+What it is:
+- serial CSR lower-triangular forward solve
+
+Why it was the starting point:
+- simplest custom CPU baseline
+- easiest implementation to verify against residual checks and MKL
+
+What the first benchmark signal showed:
+- Basic was already very strong on the real matrix set
+- it consistently beat MKL on the tested platform
+
+Decision after the baseline:
+- keep Basic as the reference custom kernel
+- only pursue lightweight optimizations that had a chance to improve the inner loop
+
+
+BranchReduced
+-------------
+Kernel:
+- BranchReduced
+
+What changed:
+- diagonal handling was separated from the main accumulation loop
+- the hot loop avoided the repeated branch pattern in Basic
+
+Why it was added:
+- the first CPU-side hypothesis was that a serial micro-optimization might help
+  more than heavier restructuring
+
+What profiling and benchmarking showed:
+- correctness remained good
+- timing on real matrices did not beat Basic consistently
+- on Explorer, ASIC_100k showed BranchReduced slower than Basic
+
+Decision:
+- keep the kernel in the benchmark as an experiment
+- do not promote it as the preferred CPU kernel
+
+
+Unrolled
+--------
+Kernel:
+- Unrolled
+
+What changed:
+- kept the serial structure
+- used the branch-reduced structure
+- unrolled the inner accumulation loop
+
+Why it was added:
+- after BranchReduced, the next reasonable serial experiment was a low-risk
+  instruction-level optimization
+
+What profiling and benchmarking showed:
+- correctness remained good
+- the profile shape remained similar to Basic
+- any benefit was small and not strong enough to replace Basic as the final choice
+
+Decision:
+- keep it as an explored serial variant
+- do not replace Basic with it
+
+
+BasicOmp
+--------
+Kernel:
+- BasicOmp
+
+What changed:
+- dependency levels were computed
+- rows in the same level were processed in parallel with OpenMP
+
+Why it was added:
+- test whether matrix-level parallelism on CPU could outperform the serial solve
+
+What profiling and benchmarking showed:
+- Explorer VTune runs on ASIC_100k showed visible OpenMP runtime overhead
+- the profile explicitly showed `__kmp_api_GOMP_parallel`
+- BasicOmp was much slower than Basic on representative matrices
+
+Decision:
+- do not treat BasicOmp as the final CPU kernel
+- only continue OpenMP exploration to confirm whether overhead could be reduced
+
+
+GuidedOmp
+---------
+Kernel:
+- GuidedOmp
+
+What changed:
+- kept the level-scheduled OpenMP structure
+- changed scheduling to guided to reduce imbalance on irregular levels
+
+Why it was added:
+- if OpenMP was losing due to poor within-level balance, guided scheduling was the
+  lightest experiment to try next
+
+What profiling and benchmarking showed:
+- still slower than Basic across the real sweep
+- among OpenMP variants it was less bad than some others, but still not competitive
+
+Decision:
+- keep as an explored variant
+- continue only as part of the OpenMP comparison set, not as a leading candidate
+
+
+BranchReducedOmp
+----------------
+Kernel:
+- BranchReducedOmp
+
+What changed:
+- used the BranchReduced inner row kernel inside the OpenMP level schedule
+
+Why it was added:
+- test whether OpenMP overhead plus row-kernel overhead together could be improved
+
+What profiling and benchmarking showed:
+- no consistent win over BasicOmp
+- still slower than Basic on the real sweep
+
+Decision:
+- retain only as an experimental OpenMP branch
+
+
+UnrolledOmp
+-----------
+Kernel:
+- UnrolledOmp
+
+What changed:
+- used the Unrolled row kernel inside the OpenMP level schedule
+
+Why it was added:
+- test whether the better serial inner loop could rescue the OpenMP path
+
+What profiling and benchmarking showed:
+- no strong improvement over BasicOmp
+- still clearly behind Basic on real matrices
+
+Decision:
+- keep only as explored evidence
+- not selected as a final CPU kernel
+
+
+GuidedUnrolledOmp
+-----------------
+Kernel:
+- GuidedUnrolledOmp
+
+What changed:
+- combined guided OpenMP scheduling with the unrolled row kernel
+
+Why it was added:
+- this was the strongest remaining OpenMP combination worth testing
+
+What profiling and benchmarking showed:
+- still slower than Basic on the full real sweep
+- OpenMP-side overhead remained too large relative to useful work
+
+Decision:
+- conclude that the OpenMP branch did not justify further investment for this
+  project’s final CPU result
+
+
+CPU Profiling Summary
+---------------------
+What was profiled:
+- full real sweep on Explorer
+- individual matrix runs, especially ASIC_100k
+- additional focused runs after BranchReduced and Unrolled were added
+
+First whole-sweep VTune result:
+- the first `real` sweep profile on Explorer showed that the process-level cost
+  was dominated by Matrix Market parsing and setup rather than the solve body
+- representative numbers from the full sweep:
+  - elapsed time about `24.159s`
+  - CPU time about `22.900s`
+  - effective time about `22.530s`
+  - effective CPU utilization only about `0.928 / 28`
+
+Top hotspots in the whole-sweep run:
+- `std::istream::_M_extract<double>`
+  - about `5.736s`
+  - about `25.0%`
+- `std::istream::operator>>`
+  - about `5.400s`
+  - about `23.6%`
+- `loadMatrixMarketAsLowerTriangular(...)`
+  - about `1.612s`
+  - about `7.0%`
+- `std::basic_ios::init`
+  - about `1.461s`
+  - about `6.4%`
+- `std::getline(...)`
+  - about `1.381s`
+  - about `6.0%`
+
+What that meant:
+- the full sweep was useful for understanding end-to-end workflow cost
+- but it was not the right profile to use for choosing between kernel bodies
+
+Decision after the whole-sweep profile:
+- move from full-sweep profiling to one-matrix profiling
+- use focused runs to understand the custom kernels more directly
+
+One-matrix VTune result on ASIC_100k, Basic:
+- elapsed time about `1.787s`
+- CPU time about `0.800s`
+- effective CPU utilization about `0.828 / 28`
+
+Top hotspots:
+- `std::istream::_M_extract<double>`
+  - about `53.8%`
+- `std::istream::operator>>`
+  - about `20.0%`
+- `loadMatrixMarketAsLowerTriangular(...)`
+  - about `6.2%`
+
+One-matrix VTune result on web-Stanford, Basic:
+- elapsed time about `1.858s`
+- CPU time about `0.890s`
+- effective CPU utilization about `0.841 / 28`
+
+Top hotspots:
+- `std::istream::operator>>`
+  - about `36.0%`
+- `std::basic_ios::init`
+  - about `14.6%`
+- `loadMatrixMarketAsLowerTriangular(...)`
+  - about `11.3%`
+
+What repeated one-matrix VTune runs showed:
+- even after switching to `real-one`, the process-level profile was still heavily
+  influenced by matrix loading and parsing
+- this was true across multiple real matrices, not only ASIC_100k
+- that made VTune more useful as a direction-checking tool than as a pure
+  instruction-level kernel microscope
+
+OpenMP-specific VTune signal:
+- `BasicOmp` introduced visible OpenMP runtime overhead
+- the profile showed `__kmp_api_GOMP_parallel`
+- effective utilization still remained low relative to available cores
+
+What that meant:
+- the OpenMP path was not losing only because of poor threshold choices
+- there was a real coordination/runtime cost in the level-scheduled parallel path
+
+Decision after the OpenMP-focused profiling:
+- continue only a limited OpenMP exploration
+- use the OpenMP branch mainly to confirm whether the overhead problem was
+  structural
+
+BranchReduced and Unrolled follow-up profiling:
+- their profiles remained broadly similar to Basic
+- no major hotspot disappeared
+- no strong compute-side signal suggested a decisive replacement for Basic
+
+Decision after the serial follow-up profiling:
+- keep BranchReduced and Unrolled documented as explored variants
+- retain Basic as the preferred CPU kernel
+
+Important interpretation:
+- the benchmark timings themselves were still valid because the solve call was
+  the timed region
+- the profiling runs were less clean as kernel-only profiles because VTune sees
+  the whole process
+- VTune was therefore used mainly to identify bad directions and bottlenecks in
+  surrounding overhead, not to justify replacing Basic with another CPU kernel
+
+Final CPU decision
+------------------
+- Basic remained the final custom CPU kernel
+- BranchReduced and Unrolled were explored but did not provide a decisive upgrade
+- all OpenMP variants were slower on the real sweep
+- MKL remained the library baseline
+
+
+GPU Side
+========
+
+GPU Goal
+--------
+Start from a correctness-first GPU baseline and build toward stronger custom
+ kernels that reduce launch overhead, improve scheduling, and stay competitive
+against cuSPARSE.
+
+Initial clean baseline
+----------------------
+Paths kept at the start:
+- CPU reference solver
+- naive GPU kernel
+- cuSPARSE baseline
+
+Why:
+- establish correctness first
+- make every later improvement easy to compare against
+
+
+Naive
+-----
+Kernel:
+- naive
+
+What it was:
+- essentially a correctness baseline with no useful GPU parallelism
+
+What we learned:
+- correct
+- far too slow to be a serious custom kernel
+
+Decision:
+- use only as a baseline
+- move immediately to kernels that expose parallelism inside a row
+
+
+Coalesced
+---------
+Kernel:
+- coalesced
+
+What changed:
+- one CUDA block cooperates on a row
+- CSR reads are organized more coalescently
+- shared-memory reduction is used for the partial sums
+
+Why it was added:
+- improve memory behavior and intra-row parallelism without changing the overall
+  solve structure too aggressively
+
+What benchmarking showed:
+- immediate major improvement over Naive
+- became the first strong custom GPU kernel
+- remained a durable reference kernel throughout later work
+
+Decision:
+- keep Coalesced as a main comparison kernel
+- use it as a yardstick for later adaptive and family-aware designs
+
+
+ThreadRow, WarpRow, BlockRow
+----------------------------
+Kernels:
+- thread
+- warp
+- block
+
+What changed:
+- ThreadRow:
+  - one thread per row
+- WarpRow:
+  - one warp per row
+- BlockRow:
+  - one block per row
+
+Why they were added:
+- understand how different row sizes behave under different execution granularities
+- build components for later adaptive dispatch
+
+What benchmarking showed:
+- ThreadRow improved on Naive but was still weak
+- WarpRow was stronger than ThreadRow for medium rows
+- BlockRow only became useful for larger rows
+- all three still suffered from excessive launch overhead when used row-by-row
+
+Decision:
+- do not treat any one of them as the final kernel
+- use them as building blocks for an adaptive dispatcher
+
+
+AdaptiveRow
+-----------
+Kernel:
+- adaptive
+
+What changed:
+- dispatch among ThreadRow, WarpRow, and BlockRow depending on row size
+
+Why it was added:
+- no single row-specialized kernel won across all row widths
+
+What profiling showed:
+- Nsight revealed the real bottleneck was not just threshold choice
+- the real problem was the number of launches
+- representative launch counts:
+  - old AdaptiveRow at n=8192: about 32780 launches
+  - old AdaptiveRow at n=32768: about 131084 launches
+
+Decision:
+- threshold tuning alone was not enough
+- the next step had to reduce launch count structurally
+
+
+RowBucketed
+-----------
+Kernel:
+- rowbucketed
+
+What changed:
+- rows were grouped into thread / warp / block buckets
+- contiguous runs were compressed into segments
+- launches were issued per segment instead of per row
+
+Why it was added:
+- preserve row-shape specialization
+- eliminate the row-by-row launch storm exposed by Nsight
+
+What profiling and benchmarking showed:
+- launch count dropped dramatically
+- RowBucketed became much stronger than AdaptiveRow
+- it was one of the biggest structural gains after Coalesced
+
+Decision:
+- keep RowBucketed as a main custom GPU kernel
+- after launch overhead was reduced, investigate matrix-level scheduling next
+
+
+LevelAware
+----------
+Kernel:
+- levelaware
+
+What changed:
+- dependency levels were computed on the host
+- rows in the same level were organized into buckets and processed together
+
+Why it was added:
+- RowBucketed reduced launch overhead, but profiling showed the remaining problem
+  was matrix-wide execution efficiency and idle waiting
+
+What benchmarking and profiling showed:
+- structurally correct and promising on matrices with wider dependency frontiers
+- not a universal winner
+- worked best on cases like wide-level or moderately irregular matrices
+- still had avoidable per-level overhead on other families
+
+Decision:
+- do not make LevelAware the universal answer
+- specialize the level-aware idea by family
+
+
+RandomAware
+-----------
+Kernel:
+- randomaware
+
+What changed:
+- built from the LevelAware idea
+- reused device row-list buffers across levels
+- used separate CUDA streams within a level
+- retuned thresholds for random-like structure
+
+Why it was added:
+- generic LevelAware on random matrices was losing to avoidable host-side
+  orchestration and allocation churn
+
+What profiling showed:
+- cudaMalloc/cudaFree counts dropped sharply compared with generic LevelAware
+- launch count also dropped
+
+What benchmarking showed:
+- RandomAware was much stronger on random and irregular families
+
+Decision:
+- keep RandomAware as a key specialized kernel
+
+
+PowerLawAware
+-------------
+Kernel:
+- powerlawaware
+
+What changed:
+- level-aware / bucket-aware design specialized for power-law structure
+
+Why it was added:
+- graph-like and power-law matrices behaved differently from random irregular ones
+- the row-width mix and frontier behavior suggested a different specialization
+
+What benchmarking showed:
+- PowerLawAware became one of the most frequent winners on graph-style real matrices
+- often outperformed generic alternatives on large irregular real cases
+
+Decision:
+- keep as a major specialized custom kernel
+
+
+BandedAware
+-----------
+Kernel:
+- bandedaware
+
+What changed:
+- specialization intended for banded or near-banded structure
+
+Why it was added:
+- the family analysis showed banded matrices needed a different path than random
+  or power-law matrices
+
+What benchmarking showed:
+- useful for structure-specific routing
+- not a universal winner
+
+Decision:
+- keep as a selectable specialization
+
+
+RegularAware
+------------
+Kernel:
+- regularaware
+
+What changed:
+- specialization for more regular row-structure cases
+
+Why it was added:
+- some matrices were not random enough for RandomAware and not graph-like enough
+  for PowerLawAware
+
+What benchmarking showed:
+- useful in the family-based routing set
+- more of a routing target than a dominant global winner
+
+Decision:
+- keep as a supported specialization
+
+
+BlockAware
+----------
+Kernel:
+- blockaware
+
+What changed:
+- heavier block-oriented execution path for matrices with block-like structure
+
+Why it was added:
+- some matrices had denser local row patterns that could benefit from larger
+  block-wide work
+
+What benchmarking showed:
+- useful for completeness in the family-aware set
+- not one of the dominant overall winners
+
+Decision:
+- keep as a specialist kernel, not the main default
+
+
+FamilyAware
+-----------
+Kernel:
+- familyaware
+
+What changed:
+- hand-coded routing from matrix features/families to a selected specialized kernel
+
+Why it was added:
+- once several specialized kernels existed, there needed to be a structured way
+  to route matrices without manual selection
+
+What benchmarking showed:
+- often selected strong kernels
+- performed well on the curated family set
+- served as the main rule-based adaptive baseline
+
+Decision:
+- keep FamilyAware as the rule-based selector baseline
+
+
+LearnedAware
+------------
+Kernel:
+- learnedaware
+
+What changed:
+- replaced hand-coded family routing with a learned selector
+- uses matrix features to choose among the specialized kernels
+
+Why it was added:
+- test whether a learned selector could match or improve on manual routing
+
+What benchmarking showed:
+- competitive with FamilyAware
+- not always the winner on every platform
+- selector quality depended on the retained weights and the hardware used
+
+Decision:
+- keep LearnedAware as the learned selector path
+- keep the final benchmark weights stable instead of promoting overfit retraining
+
+
+cuSPARSE baseline
+-----------------
+Kernel:
+- cusparse
+
+Role:
+- library baseline on GPU
+
+Important benchmark decision:
+- extra helper modes such as `learnedaware-solve`, custom `-persist` modes,
+  `cusparse-solve`, and `cusparse-persist` were eventually removed from the main
+  benchmark interface so the final comparison stayed cleaner:
+  - custom kernels vs normal cuSPARSE
+
+Why that mattered:
+- it avoided mixing persistent steady-state paths with normal one-shot paths
+- it made the CPU/GPU methodology more consistent
+
+
+GPU Profiling Summary
+---------------------
+What profiling showed at each stage:
+
+1. AdaptiveRow:
+- too many launches
+- the dominant issue was launch overhead
+
+2. RowBucketed:
+- launch count dropped sharply
+- after that, the remaining bottleneck shifted toward total kernel completion and
+  matrix-wide scheduling
+
+3. LevelAware and family-aware kernels:
+- family-specific structure mattered
+- wide-frontier and irregular families benefited from different specialized paths
+
+4. Later full-process Nsight runs:
+- one-shot runs still showed substantial API/setup cost
+- `cudaMalloc` and `cudaDeviceSynchronize` remained very visible in summaries
+- that reinforced the need to compare like with like in the final benchmark modes
+
+
+Final Active Kernel Sets
+========================
+
+CPU
+---
+Active custom kernels:
+- Basic
+- BranchReduced
+- Unrolled
+- BasicOmp
+- GuidedOmp
+- BranchReducedOmp
+- UnrolledOmp
+- GuidedUnrolledOmp
+
+Baseline:
+- MKL
+
+Final CPU choice:
+- Basic
+
+
+GPU
+---
+Active custom benchmark kernels:
+- coalesced
+- rowbucketed
+- levelaware
+- randomaware
+- powerlawaware
+- blockaware
+- bandedaware
+- regularaware
+- familyaware
+- learnedaware
+
+Baseline:
+- cusparse
+
+Additional synthetic-only historical kernels still present in the code:
+- naive
+- thread
+- warp
+- adaptive
+- block
+
+Final GPU benchmark interface decision:
+- keep the normal custom kernels
+- keep normal `cusparse`
+- remove special helper comparison modes from the main interface
+
+
+Overall Conclusions
+===================
+
+CPU
+---
+- The serial Basic kernel remained the best final CPU custom kernel.
+- Serial micro-optimizations were explored carefully but did not produce a
+  decisive replacement.
+- OpenMP variants were useful to study, but their runtime overhead outweighed
+  their benefit on the project benchmark set.
+
+GPU
+---
+- The GPU path improved through clear structural steps:
+  - correctness baseline
+  - coalesced row work
+  - row-shape specialization
+  - launch-count reduction
+  - level/family specialization
+  - learned routing
+- Profiling repeatedly changed the direction of development:
+  - first away from row-by-row launches
+  - then toward family-specific and scheduling-aware kernels
+- The final GPU benchmark interface was simplified so the main comparison stayed
+  fair and easy to explain.

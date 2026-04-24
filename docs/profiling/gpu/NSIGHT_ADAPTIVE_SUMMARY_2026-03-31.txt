@@ -1,0 +1,64 @@
+Nsight profiling summary for GPU New adaptive-kernel investigation
+Date: 2026-03-31
+Tool used: Nsight Systems (nsys)
+Environment note: Under this WSL setup, nsys captured reliable CUDA API summaries but did not populate the CUDA GPU kernel trace tables. The reports were still useful for identifying launch/synchronization bottlenecks.
+
+Profiled runs
+- profiling/adaptive_8192.nsys-rep
+- profiling/adaptive_8192_stats.txt
+- profiling/adaptive_8192_trace.nsys-rep
+- profiling/adaptive_8192_trace_stats.txt
+- profiling/adaptive_32768_trace.nsys-rep
+- profiling/adaptive_32768_trace_stats.txt
+
+Key API-level findings
+1. n = 8192
+- cudaLaunchKernel: 32780 calls, 396.34 ms total
+- cudaDeviceSynchronize: 7 calls, 89.92 ms total
+- cudaMalloc: 36 calls, 307.77 ms total
+
+2. n = 32768
+- cudaLaunchKernel: 131084 calls, 2055.87 ms total
+- cudaDeviceSynchronize: 7 calls, 859.53 ms total
+- cudaMalloc: 36 calls, 187.88 ms total
+
+Interpretation
+- The adaptive path is dominated by O(n) row-by-row kernel launches.
+- The launch count scales directly with matrix size and becomes the main reason the adaptive solver falls behind.
+- Synchronization cost also grows sharply with size because each benchmark lane ends with a device-wide sync after many tiny launches.
+- Row-local logic is not the main bottleneck anymore; global scheduling overhead is.
+
+Why AdaptiveRow is not matching BlockRow/Coalesced consistently
+- AdaptiveRow currently dispatches one kernel launch per row.
+- Switching between ThreadRow/WarpRow/BlockRow helps choose better per-row work shapes, but it does not remove the row-by-row launch pattern.
+- Coalesced performs better because it avoids the O(n) launch storm by processing all rows inside one long-running kernel launch.
+- BlockRow can beat AdaptiveRow at some larger sizes because it uses the stronger per-row kernel without the extra thresholding overhead from mixed dispatch decisions.
+
+Recommended next changes
+1. Remove row-by-row host dispatch from AdaptiveRow.
+- Group rows by bucket on the host before launching:
+  - tiny rows -> thread bucket
+  - medium rows -> warp bucket
+  - heavy rows -> block bucket
+- Launch one kernel per bucket (or per chunk), not one kernel per row.
+
+2. Precompute row buckets once.
+- Build arrays of row IDs for thread/warp/block paths before timing.
+- Then each kernel processes many rows from its bucket in one launch.
+
+3. Replace the current host-side AdaptiveRow loop with bucketed kernels.
+- thread-bucket kernel: one thread handles one row ID from a row-index list
+- warp-bucket kernel: one warp handles one row ID from a row-index list
+- block-bucket kernel: one block handles one row ID from a row-index list
+
+4. Only keep the current row-by-row adaptive path as a correctness baseline.
+- It is useful for validation, but it is structurally launch-bound.
+
+5. If needed after bucketing, reduce setup overhead.
+- Reuse device allocations across runs
+- Avoid repeated malloc/free when benchmarking many kernels in one process
+
+Bottom line
+- The main problem with AdaptiveRow is not the threshold values alone.
+- The main problem is that it is still host-dispatched row by row.
+- The best improvement is to make AdaptiveRow bucketed and batched, so it launches per bucket/chunk rather than per row.

@@ -1,0 +1,106 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --job-name=GPURealSweep
+#SBATCH --partition=courses-gpu
+#SBATCH --gres=gpu:v100:1
+#SBATCH --output=gpu_real_sweep_%j.out
+#SBATCH --error=gpu_real_sweep_%j.err
+
+set -euo pipefail
+
+module load cuda/12.8
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../../../.." && pwd)"
+RESULT_DIR="${RESULT_DIR:-$SLURM_SUBMIT_DIR}"
+BUILD_DIR="$REPO_ROOT/build/gpu"
+BINARY="$BUILD_DIR/sptrsv_bench"
+
+mkdir -p "$RESULT_DIR"
+cd "$REPO_ROOT"
+export CUDA_ARCH=70
+
+rm -rf \
+  "$RESULT_DIR/gpu_real_all_kernels.txt" \
+  "$RESULT_DIR/nsys_gpu_real_all_summary.txt" \
+  "$RESULT_DIR"/nsys_real_*
+
+"$REPO_ROOT/scripts/gpu/run_benchmark.sh" real-one ASIC_100k learnedaware > /dev/null
+
+modes=(
+  coalesced
+  rowbucketed
+  levelaware
+  randomaware
+  powerlawaware
+  blockaware
+  bandedaware
+  regularaware
+  familyaware
+  learnedaware
+  cusparse
+)
+
+matrices=(
+  ASIC_100k
+  LFAT5000
+  poli
+  web-Stanford
+  circuit204
+  soc-sign-epinions
+  msc04515
+  pwtk
+  helm2d03
+  apache1
+  bcsstk13
+  bcsstk14
+  bcsstk17
+  bcsstk18
+  bcsstk27
+  bcsstm22
+  scircuit
+  fv1
+  fv2
+  fv3
+  EPA
+  ca-GrQc
+  email-Enron
+  soc-Epinions1
+  roadNet-CA
+  wiki-Vote
+  ASIC_680k
+  web-BerkStan
+  roadNet-TX
+  wiki-Talk
+)
+
+for mode in "${modes[@]}"; do
+  for matrix in "${matrices[@]}"; do
+    safe_mode=$(echo "$mode" | tr '-' '_')
+    safe_matrix=$(echo "$matrix" | tr '-' '_')
+
+    {
+      echo "===== ${matrix} | ${mode} ====="
+      "$BINARY" real-one "$matrix" "$mode"
+      echo
+    } >> "$RESULT_DIR/gpu_real_all_kernels.txt" 2>&1
+
+    nsys profile \
+      --force-overwrite true \
+      --stats=true \
+      --trace=cuda,nvtx,osrt \
+      --sample=none \
+      -o "$RESULT_DIR/nsys_real_${safe_matrix}_${safe_mode}" \
+      "$BINARY" real-one "$matrix" "$mode" > /dev/null 2>&1
+
+    {
+      echo "===== ${matrix} | ${mode} ====="
+      nsys stats --force-export=true --report cuda_api_sum,osrt_sum "$RESULT_DIR/nsys_real_${safe_matrix}_${safe_mode}.nsys-rep"
+      echo
+    } >> "$RESULT_DIR/nsys_gpu_real_all_summary.txt" 2>&1
+  done
+done
+
+echo "Done."
+echo "Benchmark output: $RESULT_DIR/gpu_real_all_kernels.txt"
+echo "Nsight summary:   $RESULT_DIR/nsys_gpu_real_all_summary.txt"

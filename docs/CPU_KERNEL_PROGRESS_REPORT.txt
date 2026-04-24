@@ -1,0 +1,83 @@
+CPU Kernel Progress Report
+==========================
+
+State
+-----
+The `CPU` folder has been reset to a clean baseline.
+
+Active source files
+-------------------
+- `sptrsv_kernel.h`
+- `sptrsv_kernel.cpp`
+- `sptrsv_benchmark.cpp`
+- `run_benchmark.sh`
+
+Active custom kernels
+---------------------
+- `Basic`
+  - serial CSR lower-triangular forward solve
+- `BranchReduced`
+  - serial branch-reduced variant of the same CSR solve
+- `Unrolled`
+  - serial branch-reduced solve with 4-way inner-loop unrolling
+- `BasicOmp`
+  - level-scheduled OpenMP variant of the same CSR solve
+- `GuidedOmp`
+  - level-scheduled OpenMP solve using guided scheduling
+- `BranchReducedOmp`
+  - branch-reduced row kernel inside the OpenMP level schedule
+- `UnrolledOmp`
+  - unrolled row kernel inside the OpenMP level schedule
+- `GuidedUnrolledOmp`
+  - unrolled row kernel plus guided OpenMP scheduling
+
+Library baseline
+----------------
+- `MKL`
+  - implemented in the benchmark file
+
+Benchmark structure
+-------------------
+The CPU benchmark now mirrors the GPU workflow shape more closely:
+- default run:
+  - synthetic family sweep
+- `families [family] [n]`
+  - synthetic family sweep with optional filter
+- `family-one <family-name> <n> [basic|branchred|unrolled|basicomp|guidedomp|branchomp|unrollomp|guidedunrollomp|mkl|all]`
+  - one synthetic family case
+- `real`
+  - real Matrix Market sweep
+- `real-one <matrix-name> [basic|branchred|unrolled|basicomp|guidedomp|branchomp|unrollomp|guidedunrollomp|mkl|mkl-solve|all]`
+  - one real matrix case
+
+Matrix families
+---------------
+Synthetic:
+- `random`
+- `banded`
+- `chain`
+- `wide-level`
+- `block`
+- `power-law`
+
+Real:
+- the same curated real matrix list used by the benchmark
+
+Design choice
+-------------
+The CPU tree is intentionally simple:
+- `Basic` as the serial baseline
+- `BranchReduced` as the first serial micro-optimization
+- `Unrolled` as the next serial micro-optimization
+- `BasicOmp` as the first parallel CPU kernel
+- OpenMP experiment variants:
+  - `GuidedOmp`
+  - `BranchReducedOmp`
+  - `UnrolledOmp`
+  - `GuidedUnrolledOmp`
+- no profiling artifacts
+- no saved result dumps
+- no experimental optimization stack
+
+This is a clean baseline intended for direct CPU-vs-library benchmarking with the
+same benchmarking methodology shape as the GPU side.

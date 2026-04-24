@@ -1,0 +1,55 @@
+Generating SQLite file profiling/block/block_32768_family.sqlite from profiling/block/block_32768_family.nsys-rep
+Processing [profiling/block/block_32768_family.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/cuda_api_sum.py]... 
+
+ ** CUDA API Summary (cuda_api_sum):
+
+ Time (%)  Total Time (ns)  Num Calls  Avg (ns)   Med (ns)  Min (ns)  Max (ns)   StdDev (ns)                Name               
+ --------  ---------------  ---------  ---------  --------  --------  ---------  -----------  ---------------------------------
+     19.8        670642128      14462    46372.7   26597.0       995   88290038     971045.0  cudaDeviceSynchronize            
+     18.1        612896874      51587    11880.8    4320.0      2462   94463160     600348.3  cudaLaunchKernel                 
+     16.5        560486396      16620    33723.6    5518.0      3099  107293717    1315172.5  cudaMemcpy                       
+     15.1        511326131      33085    15454.9    4593.0      2114  167294160    1016511.9  cudaMemcpyAsync                  
+     14.8        501129763      14460    34656.3   29475.0       956    3187246      39985.3  cudaStreamSynchronize            
+      8.8        297317656         39  7623529.6   55929.0      1177  290199449   46439539.6  cudaMalloc                       
+      6.4        217411580      17174    12659.3    1926.0      1680   85747045     662258.6  cudaEventRecord                  
+      0.3         11051295      21505      513.9     373.0       323      54462       1140.8  cudaStreamWaitEvent              
+      0.2          8217709         40   205442.7   97254.5      1258    2009322     340481.2  cudaFree                         
+      0.0           276048          6    46008.0   42698.5     33000      69795      13325.2  cudaMemset                       
+      0.0           157367          1   157367.0  157367.0    157367     157367          0.0  cudaLaunchCooperativeKernel      
+      0.0            69924        419      166.9      95.0        50       7006        403.2  cuGetProcAddress_v2              
+      0.0            66424          4    16606.0   17639.0      4013      27133      10524.9  cudaMemsetAsync                  
+      0.0            37121          4     9280.3    4346.0       799      27630      12654.6  cudaStreamCreate                 
+      0.0            10766          4     2691.5    2626.5       723       4790       2263.8  cudaStreamDestroy                
+      0.0             7338          3     2446.0     263.0       230       6845       3809.7  cudaEventDestroy                 
+      0.0             4660          2     2330.0    2330.0       863       3797       2074.7  cudaGetDeviceProperties_v2_v12000
+      0.0             3988          1     3988.0    3988.0      3988       3988          0.0  cuInit                           
+      0.0             2496          3      832.0     276.0       247       1973        988.2  cudaEventCreateWithFlags         
+      0.0             1277          2      638.5     638.5        92       1185        772.9  cuModuleGetLoadingMode           
+
+Processing [profiling/block/block_32768_family.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/osrt_sum.py]... 
+
+ ** OS Runtime Summary (osrt_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)    Med (ns)    Min (ns)  Max (ns)   StdDev (ns)           Name         
+ --------  ---------------  ---------  ----------  -----------  --------  ---------  -----------  ----------------------
+     91.5       6861904742         73  93998695.1  102783334.0      1178  103113792   25059737.1  poll                  
+      7.5        563925963      83352      6765.6       2229.0       999   11546589     109434.8  ioctl                 
+      0.9         69039205          4  17259801.3   16532048.5    685117   35289991   18818239.8  fread                 
+      0.0          3012677         30    100422.6       5073.5      1175    1266639     295649.8  fopen                 
+      0.0           885079          5    177015.8      85959.0     64720     565804     217523.2  sem_timedwait         
+      0.0           693135          4    173283.8     183983.0    103621     221548      49925.9  pthread_create        
+      0.0           636050          8     79506.3       2349.0      1050     574251     200265.8  fclose                
+      0.0           585194          1    585194.0     585194.0    585194     585194          0.0  pthread_join          
+      0.0           424870         22     19312.3      14284.5      3633      63077      14501.3  mmap                  
+      0.0            98204          1     98204.0      98204.0     98204      98204          0.0  pthread_cond_wait     
+      0.0            74152          5     14830.4      17443.0      1113      19862       7746.9  write                 
+      0.0            61817          4     15454.3       7638.5      4602      41938      17718.8  pipe2                 
+      0.0            35440          2     17720.0      17720.0      1112      34328      23487.3  pthread_mutex_lock    
+      0.0            28921          1     28921.0      28921.0     28921      28921          0.0  fgets                 
+      0.0            19797          3      6599.0       6295.0      4784       8718       1984.5  open                  
+      0.0            17988          4      4497.0       1338.0      1277      14035       6358.8  pthread_cond_broadcast
+      0.0             8423          4      2105.8       2139.0      1149       2996       1012.4  fwrite                
+      0.0             5283          4      1320.8       1323.5      1013       1623        275.2  read                  
+      0.0             2475          2      1237.5       1237.5      1210       1265         38.9  fcntl                 
+      0.0             1410          1      1410.0       1410.0      1410       1410          0.0  fflush                
+

@@ -1,0 +1,23 @@
+Generating SQLite file profiling/powerlawaware_final/randomaware_32768.sqlite from profiling/powerlawaware_final/randomaware_32768.nsys-rep
+Processing [profiling/powerlawaware_final/randomaware_32768.sqlite] with [/opt/nvidia/nsight-systems/2024.6.2/host-linux-x64/reports/cuda_api_sum.py]... 
+
+ ** CUDA API Summary (cuda_api_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)   Med (ns)   Min (ns)  Max (ns)   StdDev (ns)                Name               
+ --------  ---------------  ---------  ----------  ---------  --------  ---------  -----------  ---------------------------------
+     57.7        184292877          8  23036609.6     5847.5       968  183554862   64859389.0  cudaMalloc                       
+     32.1        102541687        803    127698.2     1946.0      1707   96054487    3391116.5  cudaEventRecord                  
+      5.0         15916813          5   3183362.6  1353845.0    105805    8927151    3837373.7  cudaMemcpy                       
+      1.7          5535242        803      6893.2     3109.0      2557    1996342      70435.8  cudaLaunchKernel                 
+      1.5          4708799        803      5864.0     2747.0      2216    1376068      48564.6  cudaMemcpyAsync                  
+      0.8          2626494          1   2626494.0  2626494.0   2626494    2626494          0.0  cudaStreamSynchronize            
+      0.4          1264001          8    158000.1     9023.5      1469     741830     261166.9  cudaFree                         
+      0.2           725924          3    241974.7     1897.0       815     723212     416764.1  cudaStreamCreate                 
+      0.2           673775          3    224591.7     2002.0       359     671414     386960.4  cudaEventDestroy                 
+      0.1           454832          3    151610.7     6866.0       327     447639     256388.9  cudaEventCreateWithFlags         
+      0.1           448495        948       473.1      368.0       331      12026        543.1  cudaStreamWaitEvent              
+      0.0            36597          1     36597.0    36597.0     36597      36597          0.0  cudaMemset                       
+      0.0             9310          3      3103.3     1053.0       992       7265       3604.2  cudaStreamDestroy                
+      0.0             2942          1      2942.0     2942.0      2942       2942          0.0  cudaGetDeviceProperties_v2_v12000
+      0.0              986          1       986.0      986.0       986        986          0.0  cuModuleGetLoadingMode           
+

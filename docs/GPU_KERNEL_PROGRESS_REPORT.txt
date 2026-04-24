@@ -1,0 +1,1782 @@
+GPU New SpTRSV Kernel Progress Report
+Date: 2026-03-31
+
+Goal
+Build a clean GPU sparse triangular solve benchmark from scratch, starting with a correctness-first baseline and iterating toward a stronger custom kernel that stays competitive as matrix size grows.
+
+Starting Point
+We reset the GPU work into a fresh folder:
+- GPU New/sptrsv_kernel.cu
+- GPU New/sptrsv_kernel.cuh
+- GPU New/sptrsv_kernel.h
+- GPU New/sptrsv_benchmark.cu
+
+This new version began with only three paths:
+1. CPU reference solver
+2. naive GPU kernel
+3. cuSPARSE baseline
+
+That gave us a clean baseline for correctness and timing.
+
+Kernel Progression
+
+1. GPU Naive
+What it was:
+- one GPU thread solves the whole triangular system sequentially
+
+Why we started here:
+- simplest correctness baseline
+- easiest custom GPU implementation to verify against CPU and cuSPARSE
+
+What we learned:
+- correct, but extremely slow
+- no meaningful GPU parallelism
+
+2. GPU Coalesced
+What changed:
+- one CUDA block walks each row with coalesced CSR reads
+- shared-memory reduction combines partial sums and the diagonal
+
+Why:
+- improve memory behavior
+- use many threads for the inner row walk while preserving correctness
+
+What we learned:
+- this immediately became the strongest custom kernel
+- it stayed the best custom kernel across much of the sweep
+
+3. GPU ThreadRow
+What changed:
+- one thread handles one row
+- host launches rows in order
+
+Why:
+- simple row-specialized baseline
+- useful as a building block for later adaptive versions
+
+What we learned:
+- better than naive
+- still weak overall
+- too much launch overhead and too little per-row parallelism
+
+4. GPU WarpRow
+What changed:
+- one warp handles one row
+- warp lanes walk the row coalescently
+- warp shuffle reduction combines partial sums
+
+Why:
+- better fit for medium row sizes
+- explicit warp cooperation is natural for CSR row work
+
+What we learned:
+- consistently stronger than ThreadRow
+- still too launch-heavy because rows were launched one by one
+
+5. GPU BlockRow
+What changed:
+- one block handles one row
+- coalesced row walk plus shared-memory reduction
+
+Why:
+- try a heavier row kernel for longer rows
+- see whether larger rows benefit from block-wide cooperation
+
+What we learned:
+- not useful at small sizes
+- becomes competitive once rows get large enough
+- still suffers from one-launch-per-row overhead
+
+6. GPU AdaptiveRow
+What changed:
+- adaptive dispatcher chooses:
+  - ThreadRow for tiny rows
+  - WarpRow for medium rows
+  - BlockRow for larger rows
+
+Why:
+- no single row kernel was best for all row sizes
+- wanted one balanced row-based custom path
+
+What we learned:
+- conceptually better than any single fixed row kernel
+- but still underperformed because it launched one kernel per row
+- threshold tuning alone could not fix that structural problem
+
+Why AdaptiveRow Was Not Enough
+Profiling with Nsight Systems showed the real problem:
+- old AdaptiveRow at n=8192: 32780 kernel launches
+- old AdaptiveRow at n=32768: 131084 kernel launches
+
+So the issue was not mainly row-kernel choice.
+The issue was launch overhead from row-by-row host dispatch.
+
+7. GPU RowBucketed
+What changed:
+- classify rows into thread / warp / block buckets
+- compress contiguous runs of rows with the same bucket into segments
+- launch one kernel per segment, not one kernel per row
+
+Why:
+- keep the good row-shape selection from AdaptiveRow
+- remove the launch storm that profiling exposed
+
+What we learned:
+- this was the biggest structural improvement after Coalesced
+- it dramatically reduced launch count
+- it became a much stronger balanced custom kernel
+
+Profiler-Guided Evidence
+
+Old AdaptiveRow:
+- n=8192:
+  - 32780 cudaLaunchKernel calls
+- n=32768:
+  - 131084 cudaLaunchKernel calls
+
+RowBucketed:
+- n=16384:
+  - 841 cudaLaunchKernel calls
+- n=32768:
+  - 841 cudaLaunchKernel calls
+
+Interpretation:
+- RowBucketed largely solved the original launch-overhead problem
+- after this change, the remaining gap to cuSPARSE was no longer mostly launch cost
+- the remaining issue became matrix-wide execution efficiency and global scheduling
+
+Representative Sweep Results
+Density used: 0.01
+
+n = 512
+- Coalesced: 2.4516 ms
+- RowBucketed: 3.9336 ms
+- cuSPARSE: 29.1594 ms
+
+n = 8192
+- Coalesced: 22.0846 ms
+- RowBucketed: 16.5500 ms
+- cuSPARSE: 32.7632 ms
+
+n = 16384
+- Coalesced: 29.0860 ms
+- RowBucketed: 35.4308 ms
+- cuSPARSE: 49.6030 ms
+
+n = 32768
+- Coalesced: 70.1344 ms
+- RowBucketed: 71.2932 ms
+- cuSPARSE: 57.5633 ms
+
+Overall Conclusions
+1. Naive was only a correctness baseline.
+2. Coalesced was the first major success and remained the strongest single custom kernel.
+3. ThreadRow, WarpRow, and BlockRow were useful stepping stones for understanding row-shape tradeoffs.
+4. AdaptiveRow proved that row-size-based selection was a good idea, but also exposed that row-by-row dispatch was fundamentally too expensive.
+5. RowBucketed was the profiler-driven improvement that turned adaptive selection into a much more scalable custom path.
+
+Why We Needed Another Step After RowBucketed
+Profiling showed that RowBucketed fixed the original launch-storm problem, but it did not fully solve the larger-size scaling problem.
+
+Profiler evidence from Nsight Systems:
+- Old AdaptiveRow:
+  - n=8192: 32780 kernel launches
+  - n=32768: 131084 kernel launches
+- RowBucketed:
+  - n=16384: 841 kernel launches
+  - n=32768: 841 kernel launches
+
+This was a major improvement, but profiling also showed that after launch count dropped, the remaining cost shifted:
+- RowBucketed n=16384:
+  - cudaLaunchKernel: 7.94 ms
+  - cudaDeviceSynchronize: 38.61 ms
+- RowBucketed n=32768:
+  - cudaLaunchKernel: 8.71 ms
+  - cudaDeviceSynchronize: 92.11 ms
+
+Interpretation:
+- launch overhead was no longer the dominant issue
+- the remaining issue was the amount of time spent waiting for the bucketed kernels to finish
+- in other words, we had improved row-shape selection and launch batching, but we still were not exposing enough matrix-wide parallelism
+
+That is why the next step was not more threshold tuning. The next step was to make the execution dependency-aware at the level/frontier scale.
+
+8. GPU LevelAware
+What changed:
+- compute dependency levels on the host
+- within each level, split rows into:
+  - thread bucket
+  - warp bucket
+  - block bucket
+- process those row lists in parallel inside each dependency level
+
+Why:
+- RowBucketed still processed contiguous row ranges in order
+- that preserved correctness and reduced launches, but it left parallelism on the table
+- rows in the same dependency level can be solved together safely
+
+What we learned:
+- this is the first step toward a true frontier/level-aware adaptive solver
+- it directly follows from the profiling result that the remaining bottleneck after bucketing was matrix-wide scheduling, not launch count alone
+- the isolated first implementation is correct, but still early and not yet tuned
+
+Why we kept profiling after LevelAware
+Once LevelAware was added, family-by-family profiling showed that it was not a universal winner.
+
+What Nsight showed on isolated family cases at n=4096:
+- wide-level:
+  - LevelAware worked well
+  - low enough level count and enough rows per level to amortize overhead
+- random:
+  - LevelAware was strong, but still had avoidable overhead
+  - there were still many launches and repeated host-side orchestration costs
+- banded and block:
+  - LevelAware was poor
+  - too many narrow levels
+  - too many per-level allocations and synchronizations
+
+The key lesson was:
+- LevelAware was structurally right for wide-frontier and moderately irregular matrices
+- but it still carried unnecessary per-level overhead on random matrices
+
+9. GPU RandomAware
+What changed:
+- built a random-family-specific variant on top of LevelAware
+- kept the same dependency-level approach, but reduced overhead in two ways:
+  - device row-list buffers are allocated once and reused across levels
+  - thread / warp / block row-list launches run on separate CUDA streams within each level
+- retuned the bucket thresholds for random structure:
+  - thread bucket: nnz <= 2
+  - warp bucket: nnz <= 64
+  - block bucket: nnz > 64
+
+Why:
+- profiling showed that generic LevelAware on random was not losing because the level idea was wrong
+- it was losing because there was still too much per-level setup overhead
+
+Profiler evidence that motivated RandomAware
+Generic LevelAware on random, n=4096:
+- 166 cudaMalloc calls
+- 166 cudaFree calls
+- 161 cudaLaunchKernel calls
+
+Interpretation:
+- too much repeated allocation churn for per-level row lists
+- too much host-side orchestration for a family where the level structure itself was already useful
+
+What happened after the change
+RandomAware on random, n=4096:
+- 7 cudaMalloc calls
+- 8 cudaFree calls
+- 103 cudaLaunchKernel calls
+
+Measured result on the family sweep:
+- random, n=4096:
+  - LevelAware: 9.5292 ms
+  - RandomAware: 4.8856 ms
+  - cuSPARSE: 42.2106 ms
+
+Interpretation:
+- RandomAware kept the strength of LevelAware on random
+- but removed much of the per-level allocation and launch overhead
+- that produced about a 1.95x speedup over the generic LevelAware kernel on that case
+
+What profiling at larger random sizes showed
+We then profiled RandomAware against cuSPARSE on the large random case to see where the remaining gap comes from.
+
+Important note:
+- isolated Nsight runs in this environment include substantial first-use/runtime overhead
+- so the most reliable comparison is the API breakdown, not the raw wall-clock number from the isolated profile
+
+RandomAware on random, n=32768:
+- 803 cudaLaunchKernel calls
+- 2172 cudaStreamSynchronize calls
+- cudaLaunchKernel total API time: 5.54 ms
+- cudaStreamSynchronize total API time: 26.08 ms
+
+cuSPARSE on random, n=32768:
+- 10 cudaLaunchKernel calls
+- 1 cudaDeviceSynchronize call
+- cudaLaunchKernel total API time: 37.91 ms
+- cudaDeviceSynchronize total API time: 2.42 ms
+
+Interpretation of the large-size gap
+- RandomAware no longer loses because of allocation churn
+- it now loses because it still has too much fine-grained orchestration:
+  - hundreds of launches
+  - thousands of stream synchronizations
+- cuSPARSE appears to use a much coarser execution schedule with far fewer synchronization points
+
+What performance is still being left on the table
+- per-level stream synchronization is still too frequent
+- the random-family solver still breaks the work into too many small frontier steps
+- row-list buffering helped, but the solver still does not batch dependency frontiers as aggressively as cuSPARSE
+
+What this suggests for the next random-family optimization
+- fuse consecutive small levels for random matrices
+- reduce the number of stream synchronizations
+- move from per-level submission toward coarser frontier chunks
+- keep the row-list reuse, because that part already fixed one real bottleneck
+
+What happened when we tried the first two random-specific optimizations
+We explicitly tried:
+1. fusing consecutive small levels
+2. reducing host-side synchronization by replacing per-level stream synchronizations with event-based ordering and a final stream sync
+
+What happened:
+- the first fusion attempt was not safe
+- it broke correctness because later-level work inside a fused chunk could observe incomplete results from earlier levels in another bucket stream
+- the isolated correctness check showed this immediately through a large residual
+
+What we kept:
+- we reverted the unsafe level-fusion part
+- we kept the safer event-based ordering and final synchronization structure
+
+Result after keeping the safe part
+Focused random family sweep:
+- random, n=1024:
+  - RandomAware: 1.6091 ms
+  - cuSPARSE: 36.4875 ms
+- random, n=4096:
+  - RandomAware: 3.7043 ms
+  - cuSPARSE: 3.3138 ms
+- random, n=16384:
+  - RandomAware: 12.9585 ms
+  - cuSPARSE: 11.4957 ms
+- random, n=32768:
+  - RandomAware: 31.8056 ms
+  - cuSPARSE: 35.3808 ms
+
+Interpretation:
+- the safe synchronization change preserved correctness
+- it improved the large random case enough for RandomAware to beat cuSPARSE again at n=32768
+- but the gap is still mixed in the middle sizes, so there is more room to improve
+
+Important lesson:
+- reducing synchronization is worthwhile
+- but dependency-aware level fusion must be done much more carefully than simple chunking
+
+Current family status after the RandomAware work
+- wide-level:
+  - LevelAware is the right kernel
+  - this is our clearest level-aware success case
+- random:
+  - RandomAware is now the best custom kernel for this family
+  - after the synchronization reduction, it beats cuSPARSE at:
+    - n=1024
+    - n=32768
+  - and is close at the middle sizes
+
+Next family target
+After wide-level and random, the next family to optimize is power-law.
+
+Why power-law is next:
+- LevelAware was already one of the strongest custom kernels there
+- the family still has meaningful parallel structure
+- unlike banded or chain, it is still a good GPU target
+- unlike block, it is less dominated by narrow-frontier overhead pathologies
+
+So the progression of family-specific attention is now:
+1. wide-level:
+   validate that level-aware execution works where frontier width is large
+2. random:
+   reduce orchestration and synchronization overhead inside the level-aware design
+3. power-law:
+   next target for a specialized level-aware variant
+
+Power-law profiling status
+We profiled the power-law family next to understand where the remaining performance gap comes from before writing a specialized kernel.
+
+Current family timings from the focused sweep:
+- power-law, n=1024:
+  - LevelAware: 1.4837 ms
+  - RandomAware: 3.1501 ms
+  - cuSPARSE: 33.5339 ms
+- power-law, n=4096:
+  - LevelAware: 2.0461 ms
+  - RandomAware: 2.0786 ms
+  - cuSPARSE: 1.5161 ms
+- power-law, n=16384:
+  - LevelAware: 4.5960 ms
+  - RandomAware: 3.1841 ms
+  - cuSPARSE: 2.5188 ms
+- power-law, n=32768:
+  - LevelAware: 5.4554 ms
+  - RandomAware: 3.6395 ms
+  - cuSPARSE: 2.7547 ms
+
+What this says:
+- at small size, LevelAware is the best custom kernel
+- at larger sizes, RandomAware becomes the best custom kernel
+- cuSPARSE still stays ahead from 4096 onward, but the gap is much smaller than in the bad families
+
+Profiling result and interpretation
+Nsight Systems on the power-law family showed a pattern closer to random than to banded:
+- many kernel launches
+- many synchronization points
+- moderate event/stream overhead
+
+Representative family-trace API summary:
+- power-law, n=32768 family trace:
+  - 12487 cudaLaunchKernel calls
+  - 26 cudaDeviceSynchronize calls
+  - 78 cudaStreamWaitEvent calls
+  - 42 cudaEventRecord calls
+- power-law, n=16384 family trace:
+  - 4480 cudaLaunchKernel calls
+  - 21 cudaDeviceSynchronize calls
+  - 58 cudaStreamWaitEvent calls
+  - 32 cudaEventRecord calls
+
+Important caveat:
+- these traces are for the family harness, so they include all kernels run for that family row
+- that means the absolute API counts are not a pure per-kernel measurement
+- but they still show the broad shape of the workload: many irregular launches and synchronization points
+
+What performance is still being left on the table for power-law
+- too many irregular bucket submissions
+- too much launch overhead relative to the amount of useful work per frontier step
+- still too much synchronization/orchestration between small irregular groups of rows
+
+What this means for the next power-law kernel
+- the right direction is not a totally new execution model
+- the right direction is a power-law-specialized level-aware kernel that:
+  - biases more strongly toward warp/block handling for heavy rows
+  - reduces fine-grained orchestration for the irregular tail
+  - keeps the dependency-aware structure that already works well on this family
+
+10. GPU PowerLawAware
+What changed:
+- added a power-law-specific variant derived from the safer RandomAware structure
+- kept the level-aware, event-ordered execution model
+- retuned the row buckets to favor heavy-tail rows more aggressively:
+  - thread bucket: nnz <= 1
+  - warp bucket: nnz <= 16
+  - block bucket: nnz > 16
+
+Why:
+- power-law has a heavier row-length tail than random
+- the profiling indicated that this family should benefit more from warp/block handling on the long-row tail
+- so the first specialized attempt was to shift work away from tiny-thread handling and more quickly into warp/block execution
+
+First result:
+- power-law, n=1024:
+  - LevelAware: 1.2238 ms
+  - RandomAware: 1.3133 ms
+  - PowerLawAware: 1.3672 ms
+  - cuSPARSE: 23.2682 ms
+- power-law, n=4096:
+  - LevelAware: 1.7155 ms
+  - RandomAware: 1.7097 ms
+  - PowerLawAware: 1.0368 ms
+  - cuSPARSE: 0.9966 ms
+- power-law, n=16384:
+  - LevelAware: 5.4453 ms
+  - RandomAware: 2.9962 ms
+  - PowerLawAware: 2.1452 ms
+  - cuSPARSE: 2.0472 ms
+- power-law, n=32768:
+  - LevelAware: 7.1043 ms
+  - RandomAware: 5.1908 ms
+  - PowerLawAware: 3.8339 ms
+  - cuSPARSE: 2.6329 ms
+
+What we learned:
+- the specialization helped
+- PowerLawAware is now the best custom kernel on the power-law family from 4096 onward
+- but cuSPARSE is still slightly ahead at the larger sizes
+- this means the family-specific direction is correct, but we still leave some performance on the table
+
+Profiling the remaining power-law gap
+We then profiled PowerLawAware against cuSPARSE on the large power-law case to see what still keeps us behind.
+
+Important note:
+- isolated Nsight runs in this environment include substantial first-use/runtime overhead
+- so the most reliable signal is the API breakdown, not the raw wall-clock time from the isolated profile
+
+PowerLawAware on power-law, n=32768:
+- 762 cudaLaunchKernel calls
+- 833 cudaStreamWaitEvent calls
+- 762 cudaMemcpyAsync calls
+- 762 cudaEventRecord calls
+- 1 cudaStreamSynchronize call
+
+cuSPARSE on power-law, n=32768:
+- 10 cudaLaunchKernel calls
+- 1 cudaDeviceSynchronize call
+- 5 cudaMemcpy calls
+- 1 cudaMemcpyAsync call
+
+Interpretation:
+- PowerLawAware is no longer losing because the row-kernel choice is bad
+- it is losing because we still break the work into too many small irregular frontier submissions
+- the heavy-tail structure means many rows fall into warp/block handling, but we still submit that work in too many pieces
+- cuSPARSE is much coarser and pays far less orchestration overhead
+
+What performance is still being left on the table for power-law
+- too many kernel launches
+- too many stream-wait events
+- too many small async row-list submissions
+
+Next family target after power-law
+After wide-level, random, and power-law, the next family to investigate was block.
+
+Why block was next:
+- the custom aware kernels were still very weak there
+- RowBucketed was the only custom kernel in the right ballpark
+- this suggested that the issue was not row-kernel choice alone, but a structural mismatch between the aware scheduling model and the block family
+
+Block-family profiling
+We profiled the block family with Nsight Systems at two representative sizes:
+- block, n=4096
+- block, n=32768
+
+Representative timings seen in the family traces
+block, n=4096:
+- Coalesced: 329.8970 ms
+- RowBucketed: 13.0032 ms
+- LevelAware: 157.6523 ms
+- RandomAware: 62.5895 ms
+- PowerLawAware: 112.7891 ms
+- cuSPARSE: 193.5188 ms
+
+block, n=32768:
+- Coalesced: 385.2268 ms
+- RowBucketed: 92.5054 ms
+- LevelAware: 1203.6224 ms
+- RandomAware: 671.7913 ms
+- PowerLawAware: 859.8304 ms
+- cuSPARSE: 322.5491 ms
+
+Nsight API breakdown: block, n=4096
+- 1823 cudaDeviceSynchronize calls
+- 7542 cudaLaunchKernel calls
+- 1821 cudaStreamSynchronize calls
+- 2602 cudaMemcpy calls
+- 4416 cudaMemcpyAsync calls
+- 1839 cudaEventRecord calls
+- 1860 cudaStreamWaitEvent calls
+
+Nsight API breakdown: block, n=32768
+- 14462 cudaDeviceSynchronize calls
+- 51587 cudaLaunchKernel calls
+- 14460 cudaStreamSynchronize calls
+- 16620 cudaMemcpy calls
+- 33085 cudaMemcpyAsync calls
+- 17174 cudaEventRecord calls
+- 21505 cudaStreamWaitEvent calls
+
+What this says about the block family
+- block is dominated by orchestration overhead for the aware kernels
+- there are too many narrow frontier steps and dependency boundaries
+- the extra scheduling machinery that helped random does not help here
+- instead, it explodes into:
+  - huge launch counts
+  - huge synchronization counts
+  - heavy event/wait traffic
+  - large row-list submission traffic
+
+Most important interpretation
+- the aware kernels are structurally mismatched to the block family
+- block does not want increasingly elaborate frontier scheduling
+- block wants a simpler, coarser execution strategy
+- that is why RowBucketed remains the strongest custom kernel on block: it avoids much of the frontier-management overhead
+
+Conclusion for block
+- block is not currently a good target for the LevelAware / RandomAware / PowerLawAware family of kernels
+- the main issue is not arithmetic, memory coalescing, or row-kernel choice
+- the main issue is excessive orchestration overhead caused by too many dependency frontier submissions
+- if block is optimized next, it should likely get its own simpler block-specific strategy rather than another aware-style variant
+
+11. GPU BlockAware
+What changed:
+- added a block-family-specific path based on BCSR rather than CSR
+- instead of making the kernel choose a block size dynamically, the host analyzes the matrix first
+- candidate block sizes:
+  - 2x2
+  - 4x4
+  - 8x8
+- the host picks the block size using block occupancy analysis, then converts CSR to BCSR once and launches a BCSR solve kernel
+
+Why:
+- the block family is essentially patchy clusters of nonzeros
+- that makes it the most natural candidate for a block-compressed storage format
+- the goal was to reduce scalar CSR metadata overhead and exploit local dense structure inside patches
+
+How the analysis works:
+- for each candidate block size, we simulate block packing
+- we compute:
+  - number of nonempty blocks
+  - number of real entries inside those blocks
+  - total stored block entries
+  - occupancy = real entries / stored block entries
+- we choose the block size with the best occupancy, with a slight bias toward larger blocks when occupancies are close
+
+What we learned from the first BlockAware version
+- the first version only considered 2x2 and 4x4
+- it was correct, but still clearly behind RowBucketed
+- so we expanded the analysis to include 8x8 as well, since the synthetic block family uses much larger block patches
+
+Representative results after adding 2x2 / 4x4 / 8x8 analysis
+block, n=4096:
+- RowBucketed: 9.8501 ms
+- BlockAware: 59.7357 ms
+- cuSPARSE: 32.8781 ms
+
+block, n=16384:
+- RowBucketed: 52.7033 ms
+- BlockAware: 508.3194 ms
+- cuSPARSE: 57.3172 ms
+
+Interpretation
+- BlockAware is correct, but the current kernel is still not competitive
+- at 4096 it improved over the first BCSR attempt, but it still trails RowBucketed badly
+- at 16384 it becomes much worse than both RowBucketed and cuSPARSE
+
+Why the current BlockAware version still loses
+- the format analysis and block-size selection idea are reasonable
+- the main weakness is the current execution model:
+  - one cooperative CUDA block processes the BCSR solve sequentially across block rows
+- that means we reduce CSR metadata overhead, but we still leave too much matrix-wide parallelism unused
+
+Conclusion for BlockAware
+- host-side block-size analysis is the right policy mechanism for the block family
+- but the current BCSR execution kernel is too sequential to capitalize on it
+- so the next improvement for block would not be changing the selector again
+- it would be writing a stronger block-parallel BCSR solve kernel
+
+Profiling BlockAware directly
+To separate BlockAware from the full family harness, we added a one-shot family mode and profiled:
+- block, n=4096, mode=blockaware
+- block, n=4096, mode=rowbucketed
+
+What the isolated BlockAware profile showed
+BlockAware:
+- 5 cudaMalloc calls
+- 1 cudaLaunchKernel call
+- 1 cudaDeviceSynchronize call
+- 5 cudaMemcpy calls
+
+Representative API times:
+- cudaMalloc: 318.16 ms
+- cudaDeviceSynchronize: 71.55 ms
+- cudaLaunchKernel: 2.12 ms
+
+What the isolated RowBucketed profile showed
+RowBucketed:
+- 5 cudaMalloc calls
+- 544 cudaLaunchKernel calls
+- 1 cudaDeviceSynchronize call
+- 5 cudaMemcpy calls
+
+Representative API times:
+- cudaMalloc: 324.84 ms
+- cudaDeviceSynchronize: 22.94 ms
+- cudaLaunchKernel: 7.14 ms
+
+Interpretation of the direct comparison
+- BlockAware is not losing because of launch overhead
+- in fact, it launches far less work than RowBucketed
+- BlockAware is losing because the one BCSR kernel itself takes too long to finish
+- the current BCSR kernel is effectively too sequential across block rows, so the single long cudaDeviceSynchronize wait dominates
+
+Most important block-aware lesson
+- the block-size analysis is not the main problem
+- the format conversion is not the main problem
+- the problem is the execution kernel:
+  - one cooperative block stepping through the whole BCSR solve is too serialized
+- so the next meaningful improvement for block is a more parallel BCSR execution strategy, not more selector tuning
+
+What that suggests as the next power-law optimization
+- reduce frontier fragmentation
+- batch more irregular heavy-tail rows together inside the same dependency frontier
+- reduce event/wait traffic between tiny row groups
+
+What we changed next for PowerLawAware
+We simplified the first PowerLawAware design to cut orchestration overhead:
+- removed the separate thread bucket entirely
+- changed to a warp/block-only split:
+  - warp bucket: nnz <= 24
+  - block bucket: nnz > 24
+- collapsed the execution onto a single work stream per level
+- removed the event/wait choreography between multiple streams
+
+Why:
+- profiling said the main remaining issue was no longer the row-kernel choice itself
+- it was the amount of event/wait and submission traffic around heavy-tail rows
+- so the next step was to trade some overlap for a much simpler submission model
+
+Updated results after that simplification
+- power-law, n=1024:
+  - PowerLawAware: 1.1995 ms
+  - cuSPARSE: 28.8141 ms
+- power-law, n=4096:
+  - PowerLawAware: 1.4852 ms
+  - cuSPARSE: 1.0410 ms
+- power-law, n=16384:
+  - PowerLawAware: 2.2411 ms
+  - cuSPARSE: 1.8095 ms
+- power-law, n=32768:
+  - PowerLawAware: 3.1485 ms
+  - cuSPARSE: 2.3630 ms
+
+What we learned from this revision
+- the simplification helped at every tested size
+- PowerLawAware remains the best custom kernel for power-law
+- but cuSPARSE still keeps a meaningful lead at the larger sizes
+- this means the profile-guided change was directionally right, but not enough to fully close the gap
+
+Checking whether added machinery is still hurting performance
+We profiled the simplified PowerLawAware and compared it to the earlier event-heavy style.
+
+What improved:
+- the extra event/wait machinery was hurting performance
+- after simplification:
+  - cudaEventRecord traffic disappeared from the hot path
+  - cudaStreamWaitEvent traffic disappeared from the hot path
+- this confirms that the earlier multi-stream/event choreography was overhead, not value, for the power-law family
+
+What is still hurting now:
+- the new dominant overhead is per-level stream synchronization
+- current simplified PowerLawAware at n=32768:
+  - 724 cudaStreamSynchronize calls
+  - 775 cudaLaunchKernel calls
+  - 775 cudaMemcpyAsync calls
+
+Interpretation:
+- we successfully removed one layer of harmful top-level machinery
+- but we still have another expensive orchestration layer:
+  - one stream synchronization per active dependency level
+  - one async row-list upload per active level bucket
+
+So the answer is:
+- yes, some of what we added on top was hindering performance
+- specifically the old event/wait choreography
+- after removing that, the next remaining hindrance is per-level stream synchronization and per-level row-list submission
+
+Safe overhead-removal sweep
+We then removed only the overhead we believed could be removed without changing dependency correctness:
+- LevelAware:
+  - removed repeated per-level cudaMalloc/cudaFree
+  - switched to reusable row-list buffers
+- RandomAware:
+  - simplified from multi-stream/event orchestration to a single work stream per level
+
+What the sweep showed
+- The effect was mixed.
+- LevelAware generally benefited from buffer reuse.
+- RandomAware generally regressed after losing the more aggressive stream structure.
+
+Representative outcomes after the cleanup sweep
+- random, n=32768:
+  - LevelAware: 47.1250 ms
+  - RandomAware: 45.3013 ms
+  - PowerLawAware: 36.5232 ms
+  - cuSPARSE: 30.4174 ms
+- wide-level, n=32768:
+  - LevelAware: 6.2959 ms
+  - RandomAware: 5.4971 ms
+  - PowerLawAware: 5.7664 ms
+  - cuSPARSE: 66.2552 ms
+- power-law, n=32768:
+  - LevelAware: 5.1326 ms
+  - RandomAware: 3.7250 ms
+  - PowerLawAware: 3.1143 ms
+  - cuSPARSE: 2.4948 ms
+
+What we learned from the cleanup sweep
+- removing allocation churn is a clear win
+- removing synchronization/orchestration is only safe if the replacement still preserves enough useful overlap
+- in practice:
+  - LevelAware became cleaner and generally better
+  - RandomAware lost some of its advantage when its scheduling was oversimplified
+
+Conclusion from this step
+- not all top-level machinery is bad
+- some of it was overhead
+- some of it was actually buying useful overlap
+- so future cleanup should be selective rather than blanket simplification
+
+Bringing back the helpful scheduling structure
+We then restored the extra scheduling structure only where it had previously shown clear value:
+- RandomAware got its multi-stream/event ordering back
+- but we kept the safe buffer-reuse cleanup
+- LevelAware kept the reusable row buffers
+- PowerLawAware stayed on the simpler single-stream design because its old event-heavy structure had been clearly harmful
+
+What happened after restoring the helpful part
+Random family:
+- random, n=32768:
+  - before restore:
+    - RandomAware: 45.3013 ms
+    - cuSPARSE: 30.4174 ms
+  - after restore:
+    - RandomAware: 26.0106 ms
+    - cuSPARSE: 37.1434 ms
+
+Wide-level family:
+- wide-level, n=32768:
+  - RandomAware: 4.8010 ms
+  - LevelAware: 6.0269 ms
+  - cuSPARSE: 67.0698 ms
+
+What we learned
+- the extra scheduling structure in RandomAware was not just overhead
+- for random-like and wide-frontier work, it was buying useful overlap
+- restoring it while keeping the buffer cleanup gave a much better balance
+
+Final lesson from this iteration
+- remove overhead that profiling proves is wasteful
+- keep scheduling structure that buys real overlap
+- the right answer is selective simplification, not universal simplification
+
+Why the report progression matters
+The sequence from AdaptiveRow to RowBucketed to LevelAware to RandomAware shows a clean profiler-driven path:
+1. AdaptiveRow:
+   good row-shape idea, bad launch behavior
+2. RowBucketed:
+   fixes launch behavior
+3. LevelAware:
+   attacks the next bottleneck, which is matrix-wide dependency scheduling
+4. RandomAware:
+   keeps the level-aware structure for random matrices, but trims family-specific orchestration overhead
+
+Final Takeaway
+The progression was:
+- Naive
+- Coalesced
+- ThreadRow / WarpRow / BlockRow
+- AdaptiveRow
+- RowBucketed
+- LevelAware
+- RandomAware
+
+The most important lesson was:
+- choosing the right per-row kernel matters
+- but reducing launch overhead mattered even more
+
+RowBucketed was the endpoint of the first profiler-driven iteration because it removed the biggest bottleneck identified at that stage: launch overhead.
+
+LevelAware is the next iteration because profiling then showed that the remaining problem was no longer launch count alone, but matrix-wide dependency scheduling at larger sizes.
+
+RandomAware is the next specialization after LevelAware because profiling showed that for the random family, the level-aware structure itself was good, but the remaining overhead came from repeated per-level allocation and launch orchestration.
+
+BlockAware work
+We then explored a block-family-specific path using BCSR.
+
+Why:
+- the block family is patchy and clustered
+- that makes it the most natural candidate for a block-compressed storage format
+- the idea was to choose the block size on the host by analyzing the matrix, then run a block-structured solve kernel
+
+What we added first
+- host-side block-size analysis over:
+  - 2x2
+  - 4x4
+  - 8x8
+- block occupancy metric:
+  - real entries inside blocks / total stored block entries
+- CSR-to-BCSR conversion once before solve
+- a first BCSR solve kernel
+
+What happened
+- the first BlockAware version was correct
+- but it still lost badly to RowBucketed
+
+Representative results:
+block, n=4096:
+- RowBucketed: 9.8501 ms
+- BlockAware: 59.7357 ms
+- cuSPARSE: 32.8781 ms
+
+block, n=16384:
+- RowBucketed: 52.7033 ms
+- BlockAware: 508.3194 ms
+- cuSPARSE: 57.3172 ms
+
+What direct profiling showed
+We then profiled BlockAware directly in one-shot mode to separate it from the family harness.
+
+BlockAware:
+- 5 cudaMalloc calls
+- 1 cudaLaunchKernel call
+- 1 cudaDeviceSynchronize call
+- 5 cudaMemcpy calls
+
+Representative API times:
+- cudaMalloc: 318.16 ms
+- cudaDeviceSynchronize: 71.55 ms
+- cudaLaunchKernel: 2.12 ms
+
+RowBucketed:
+- 5 cudaMalloc calls
+- 544 cudaLaunchKernel calls
+- 1 cudaDeviceSynchronize call
+- 5 cudaMemcpy calls
+
+Representative API times:
+- cudaMalloc: 324.84 ms
+- cudaDeviceSynchronize: 22.94 ms
+- cudaLaunchKernel: 7.14 ms
+
+Interpretation:
+- BlockAware was not losing because of launch overhead
+- it was losing because the single BCSR kernel itself took too long to finish
+- the BCSR solve was too serialized across block rows
+
+What we tried next
+We then replaced the single long BCSR kernel with a block-row-level BCSR scheme:
+- compute dependency levels of block rows from the BCSR graph
+- launch one CUDA block per ready block row within each block level
+- synchronize between block levels
+
+Why:
+- the direct profile suggested that the BCSR execution kernel, not the block-size choice, was the limiting factor
+- so the next attempt was to expose more parallelism across independent block rows
+
+What happened
+- the new version remained correct
+- but it performed worse
+
+Representative results:
+block, n=4096:
+- previous BlockAware: 59.7357 ms
+- block-row-level BlockAware: 126.6846 ms
+- RowBucketed: 10.0430 ms
+
+block, n=16384:
+- previous BlockAware: 508.3194 ms
+- block-row-level BlockAware: 617.7152 ms
+- RowBucketed: 60.0042 ms
+
+Interpretation:
+- the block family still creates too many dependency boundaries even in BCSR form
+- so the new version traded one long serialized kernel for too many level-synchronized BCSR launches
+- that means simple BCSR parallelization is not enough here
+
+Current conclusion for block
+- the BCSR format idea is still reasonable in principle
+- but the BCSR execution models we tried so far are not competitive on this synthetic block family
+- RowBucketed remains the best custom kernel for block
+- if block is revisited again, it likely needs a different block-specific execution model rather than more small tweaks to the current BCSR designs
+
+Reprofiling the current BlockAware design
+We profiled the current block-row-level BlockAware directly against RowBucketed on:
+- block, n=4096
+
+Current isolated BlockAware profile
+- 6 cudaMalloc calls
+- 1312 cudaLaunchKernel calls
+- 1312 cudaDeviceSynchronize calls
+- 1317 cudaMemcpy calls
+
+Representative API times:
+- cudaMalloc: 221.68 ms
+- cudaDeviceSynchronize: 101.61 ms
+- cudaLaunchKernel: 38.81 ms
+- cudaMemcpy: 13.34 ms
+
+Current isolated RowBucketed profile
+- 5 cudaMalloc calls
+- 544 cudaLaunchKernel calls
+- 1 cudaDeviceSynchronize call
+- 5 cudaMemcpy calls
+
+Representative API times:
+- cudaMalloc: 221.70 ms
+- cudaDeviceSynchronize: 12.48 ms
+- cudaLaunchKernel: 4.85 ms
+- cudaMemcpy: 1.80 ms
+
+What this means
+- the newer BlockAware design became launch-heavy again
+- it now pays both:
+  - many small block-level launches
+  - many host-side synchronizations between those block levels
+- so it combines the worst parts of:
+  - the old serialized BCSR version
+  - the old narrow-frontier aware versions
+
+Most likely issue in the current BlockAware design
+- the block-row dependency graph in this synthetic block family is still too narrow and fragmented
+- once we switched to per-level BCSR launches, we reintroduced the same kind of frontier overhead that hurt the aware kernels on block
+- so the current problem is not BCSR format selection
+- the problem is that the block-row frontier schedule is too fine-grained to amortize the launch/sync cost
+
+Replacing the fragmented BCSR schedule with chunked BCSR
+To move away from the too-fine block-row frontier schedule, we replaced it with a coarser chunked BCSR design:
+- keep host-side block-size analysis
+- keep CSR-to-BCSR conversion
+- process contiguous chunks of block rows in simple row order
+- synchronize only between chunks, not between individual block-row levels
+
+Why:
+- the direct profile showed that the block-row-level BCSR version was launch-heavy again
+- the goal was to move back toward coarser submission without going all the way back to one giant serialized kernel
+
+What happened
+The chunked version improved over the fragmented block-row-level BCSR version, but it still did not beat RowBucketed.
+
+Representative results:
+block, n=4096:
+- fragmented BlockAware: 126.6846 ms
+- chunked BlockAware: 93.7044 ms
+- RowBucketed: 13.8597 ms
+- cuSPARSE: 62.6627 ms
+
+block, n=16384:
+- fragmented BlockAware: 617.7152 ms
+- chunked BlockAware: 581.5568 ms
+- RowBucketed: 57.6814 ms
+- cuSPARSE: 77.2131 ms
+
+Interpretation
+- chunking is the right direction relative to the fragmented BCSR schedule
+- but the current BCSR chunk kernel is still too serialized inside each chunk
+- so BlockAware remains well behind the simpler RowBucketed kernel on the block family
+
+Profiling the chunked BlockAware direction
+We then profiled the chunked BlockAware directly to check whether the API pattern was moving in the right direction, even though the wall time was still poor.
+
+Chunked BlockAware, block n=4096:
+- 256 cudaLaunchKernel calls
+- 256 cudaDeviceSynchronize calls
+- 5 cudaMemcpy calls
+
+Representative API times:
+- cudaMalloc: 253.41 ms
+- cudaDeviceSynchronize: 76.10 ms
+- cudaLaunchKernel: 6.59 ms
+
+Chunked BlockAware, block n=16384:
+- 1024 cudaLaunchKernel calls
+- 1024 cudaDeviceSynchronize calls
+- 5 cudaMemcpy calls
+
+Representative API times:
+- cudaMalloc: 125.86 ms
+- cudaDeviceSynchronize: 437.99 ms
+- cudaLaunchKernel: 18.20 ms
+
+Comparison against the fragmented block-row-level BCSR version at n=4096:
+- fragmented:
+  - 1312 cudaLaunchKernel
+  - 1312 cudaDeviceSynchronize
+- chunked:
+  - 256 cudaLaunchKernel
+  - 256 cudaDeviceSynchronize
+
+What this means
+- yes, chunking is structurally the right direction
+- it substantially reduced launch and synchronization count compared to the fragmented BCSR schedule
+- however, the remaining chunks are still too serialized internally
+- so the wall-time result is still not good enough even though the orchestration pattern improved
+
+Improving the chunk kernel itself
+We then optimized the chunk kernel internals:
+- removed the atomic-heavy predecessor accumulation inside each chunk row
+- made the block update cooperative per output row
+- reduced the launch configuration to a lighter 32-thread chunk kernel
+
+Why:
+- the chunked profile had already shown that scheduling was going in the right direction
+- the remaining bottleneck was inside each chunk, not the top-level chunk schedule
+
+What happened
+The chunk-internal optimization improved BlockAware again:
+
+block, n=4096:
+- previous chunked BlockAware: 93.7044 ms
+- improved chunked BlockAware: 84.0685 ms
+
+block, n=16384:
+- previous chunked BlockAware: 581.5568 ms
+- improved chunked BlockAware: 527.0985 ms
+
+What the updated direct profile showed at block, n=4096
+- 256 cudaLaunchKernel calls
+- 256 cudaDeviceSynchronize calls
+- 5 cudaMemcpy calls
+
+Representative API times:
+- before intra-chunk improvement:
+  - cudaDeviceSynchronize: 76.10 ms
+  - cudaLaunchKernel: 6.59 ms
+- after intra-chunk improvement:
+  - cudaDeviceSynchronize: 65.94 ms
+  - cudaLaunchKernel: 6.61 ms
+
+Interpretation
+- launch and synchronization counts stayed the same
+- that means the top-level schedule did not change
+- the improvement came from making each chunk do less work internally before the sync returned
+- so this confirms that intra-chunk compute efficiency really is the next bottleneck after chunking
+
+New issue after the chunk-internal improvement
+We profiled the latest BlockAware against RowBucketed again at:
+- block, n=16384
+
+Latest BlockAware profile:
+- 1024 cudaLaunchKernel calls
+- 1024 cudaDeviceSynchronize calls
+- 5 cudaMemcpy calls
+
+Representative API times:
+- cudaDeviceSynchronize: 393.20 ms
+- cudaLaunchKernel: 20.29 ms
+- cudaMalloc: 152.04 ms
+
+Latest RowBucketed profile:
+- 1896 cudaLaunchKernel calls
+- 1 cudaDeviceSynchronize call
+- 5 cudaMemcpy calls
+
+Representative API times:
+- cudaDeviceSynchronize: 32.36 ms
+- cudaLaunchKernel: 21.48 ms
+- cudaMalloc: 179.19 ms
+
+What this means
+- BlockAware now launches fewer kernels than RowBucketed
+- launch overhead is no longer the main issue
+- the new dominant issue is that BlockAware still has a device-wide synchronization after every chunk
+- so the kernel spends too much time stalled at chunk boundaries even though each chunk is better internally
+
+Current most important block-aware bottleneck
+- excessive per-chunk synchronization
+- not launch count
+- not block-size selection
+- not BCSR conversion
+
+Best next idea after this profile
+- if BlockAware is pushed further, the next target should be reducing the number of chunk boundaries or replacing the full-device sync between chunks with a less expensive dependency mechanism
+
+Trying event-based chunk ordering
+We then replaced the per-chunk cudaDeviceSynchronize path with event-based ordering on a work stream and made the chunks coarser:
+- chunk size increased
+- chunk completion recorded with cudaEventRecord
+- chunk ordering expressed with cudaStreamWaitEvent
+- final wait done with one cudaStreamSynchronize
+
+What happened in the family sweep
+block, n=4096:
+- previous BlockAware: 84.0685 ms
+- event-based BlockAware: 64.3032 ms
+
+block, n=16384:
+- previous BlockAware: 527.0985 ms
+- event-based BlockAware: 468.6731 ms
+
+So the change helped.
+
+New issue after the event-based change
+We profiled the updated BlockAware directly at:
+- block, n=16384
+
+Latest API summary:
+- 512 cudaLaunchKernel calls
+- 512 cudaEventRecord calls
+- 512 cudaStreamWaitEvent calls
+- 1 cudaStreamSynchronize call
+
+Representative API times:
+- cudaStreamSynchronize: 314.99 ms
+- cudaMalloc: 162.16 ms
+- cudaLaunchKernel: 4.74 ms
+- cudaEventRecord: 2.05 ms
+- cudaStreamWaitEvent: 0.28 ms
+
+Interpretation
+- replacing device-wide sync with stream/event ordering was the right direction
+- launch overhead is now small
+- event/wait overhead itself is also small
+- the new dominant issue is the single long cudaStreamSynchronize at the end
+- that means the chunk kernels are still collectively doing too much serialized work on the stream before completion
+
+Current block-aware bottleneck after the event-based fix
+- no longer launch count
+- no longer device-wide sync per chunk
+- now the main issue is total serialized work queued on the single work stream
+
+Replacing BCSR BlockAware with a RowBucketed-derived BlockAware
+We then pivoted away from BCSR entirely and rebuilt BlockAware on top of the kernel family that was already winning on block: RowBucketed.
+
+What changed:
+- kept CSR storage
+- kept the row-bucketed execution model
+- reused the host-side block-size analysis only as a policy signal
+- used the analyzed block size to tune the thresholds:
+  - smaller thread bucket
+  - larger warp/block cutover for clustered rows
+- merged adjacent medium/heavy segments into coarser block-style segments
+
+Why:
+- the BCSR work taught us useful structural lessons about the family
+- but BCSR execution itself was the wrong direction for this benchmark
+- RowBucketed was already the strongest custom kernel on block
+- so the smarter move was to inject the useful block-family insights into the stronger CSR path rather than force the family into BCSR
+
+What happened
+This new CSR-based BlockAware improved dramatically over the older BCSR-based BlockAware.
+
+Representative results:
+block, n=4096:
+- previous event-based BCSR BlockAware: 64.3032 ms
+- new CSR-based BlockAware: 23.5483 ms
+- RowBucketed: 12.3895 ms
+- cuSPARSE: 58.5515 ms
+
+block, n=16384:
+- previous event-based BCSR BlockAware: 468.6731 ms
+- new CSR-based BlockAware: 163.1629 ms
+- RowBucketed: 66.8871 ms
+- cuSPARSE: 86.5685 ms
+
+Interpretation
+- this was the first really strong improvement after the long BlockAware detour
+- the useful lessons were:
+  - use block-family analysis on the host
+  - keep execution coarser
+  - do not force the matrix into a fine-grained BCSR dependency schedule
+- the new BlockAware is now much closer to a competitive block-family custom kernel
+
+Current status for block
+- RowBucketed is still the best custom kernel on this family
+- but the new CSR-based BlockAware is a large step forward and now beats cuSPARSE at the tested sizes
+- this validates the core idea that the right place to use the block-family analysis is the scheduler policy, not necessarily the storage format
+
+Final block-family decision
+For the block family, the chosen kernel is still RowBucketed.
+
+Why:
+- it remains the fastest custom kernel on the tested block-family cases
+- all BlockAware variants improved our understanding of the family, but none surpassed RowBucketed
+- the BlockAware exploration was still valuable because it showed that:
+  - BCSR format conversion was not the main win
+  - the useful part was host-side structural analysis
+  - the best place to use that insight was in scheduler policy, not forcing a new storage format
+
+So for final family selection:
+- block -> RowBucketed
+
+13. BandedAware
+After settling the block family, the next target was the banded family.
+
+What profiling said before we changed anything
+We profiled the two best existing kernels for banded, Coalesced and RowBucketed, using Nsight Systems at n=16384.
+
+Coalesced profile:
+- 1 cudaLaunchKernel
+- 1 cudaDeviceSynchronize
+- 5 cudaMemcpy
+- cudaDeviceSynchronize time: about 50.23 ms
+- cudaLaunchKernel time: about 2.74 ms
+
+RowBucketed profile:
+- 3 cudaLaunchKernel
+- 1 cudaDeviceSynchronize
+- 5 cudaMemcpy
+- cudaDeviceSynchronize time: about 52.69 ms
+- cudaLaunchKernel time: about 1.03 ms
+
+Interpretation:
+- banded was not launch-bound
+- banded was not suffering from the same orchestration problems as the aware kernels on random, power-law, or block
+- the remaining cost was in the kernel body itself
+- that meant another awareness/scheduling layer was unlikely to help
+
+What we changed
+We built a new BandedAware kernel specialized for narrow-band structure:
+- estimate the matrix bandwidth on the host
+- launch a single low-overhead kernel
+- keep a small shared-memory cache of recently solved x values
+- reuse nearby x values when row-col stays within the estimated band
+
+This kept the execution model simple like Coalesced, but made it more aware of the strong locality in banded matrices.
+
+What happened
+Representative banded-family results:
+
+banded, n=1024:
+- Coalesced: 176.9582 ms
+- RowBucketed: 8.9469 ms
+- BlockAware: 6.3724 ms
+- BandedAware: 3.3482 ms
+- cuSPARSE: 47.7691 ms
+
+banded, n=4096:
+- Coalesced: 11.5822 ms
+- RowBucketed: 12.5267 ms
+- BlockAware: 16.1812 ms
+- BandedAware: 10.3550 ms
+- cuSPARSE: 33.7303 ms
+
+banded, n=16384:
+- Coalesced: 35.5948 ms
+- RowBucketed: 34.5006 ms
+- BlockAware: 66.5110 ms
+- BandedAware: 36.3956 ms
+- cuSPARSE: 141.2858 ms
+
+banded, n=32768:
+- Coalesced: 64.6302 ms
+- RowBucketed: 70.7441 ms
+- BlockAware: 132.4877 ms
+- BandedAware: 74.6850 ms
+- cuSPARSE: 289.4207 ms
+
+Interpretation
+- BandedAware was a real improvement for the small and medium banded cases
+- it became the best custom kernel at 1024 and 4096
+- at the larger sizes, the simpler Coalesced or RowBucketed paths stayed slightly better
+- all three strong custom choices, Coalesced, RowBucketed, and BandedAware, beat cuSPARSE on the tested banded cases
+
+Current status for banded
+- the main lesson is that banded wants a cheap narrow-structure kernel, not a complicated aware scheduler
+- BandedAware validated that profiling conclusion
+- the family is still best handled by simple low-overhead kernels rather than the broader aware-family machinery
+
+Large-size banded profiling after BandedAware
+We then profiled the larger banded case directly to understand why BandedAware stopped winning at the largest tested sizes, where Coalesced or RowBucketed were still slightly better.
+
+We compared banded, n=16384 for:
+- Coalesced
+- RowBucketed
+- BandedAware
+
+One-shot measured times:
+- Coalesced: 341.9498 ms
+- RowBucketed: 321.8721 ms
+- BandedAware: 314.5015 ms
+
+Nsight Systems API summary:
+
+Coalesced:
+- 1 cudaLaunchKernel
+- 1 cudaDeviceSynchronize
+- 5 cudaMemcpy
+- cudaLaunchKernel: about 3.43 ms
+- cudaDeviceSynchronize: about 57.55 ms
+
+RowBucketed:
+- 3 cudaLaunchKernel
+- 1 cudaDeviceSynchronize
+- 5 cudaMemcpy
+- cudaLaunchKernel: about 2.91 ms total
+- cudaDeviceSynchronize: about 50.41 ms
+
+BandedAware:
+- 1 cudaLaunchKernel
+- 1 cudaDeviceSynchronize
+- 5 cudaMemcpy
+- cudaLaunchKernel: about 63.69 ms
+- cudaDeviceSynchronize: about 52.67 ms
+
+Interpretation
+- the large-size banded case is still not launch-bound overall
+- all three kernels have very small orchestration footprints compared to the aware-family kernels on random, power-law, or block
+- BandedAware is not losing because of extra stream/event machinery
+- instead, the remaining cost is inside the kernel body itself
+
+What seems to be hurting BandedAware
+- it adds extra per-entry logic to check row-col distance against the estimated bandwidth
+- it adds the shared-memory recent-x ring buffer and modulo indexing
+- the banded matrix already has strong locality, so Coalesced and RowBucketed are likely benefiting from cache reuse anyway
+- that means the explicit band-cache logic may cost more than it saves at larger sizes
+
+So the current conclusion for banded is:
+- the limiting factor is kernel-body efficiency, not scheduling overhead
+- BandedAware helped at small and medium sizes
+- at larger sizes, the extra band-aware logic starts to become overhead instead of advantage
+- this is why Coalesced or RowBucketed can still edge it out there
+
+Simplified BandedAware
+Based on that profile, we simplified BandedAware further.
+
+What we removed:
+- the shared-memory recent-x ring buffer
+- the row-col distance check inside the inner loop
+- the modulo indexing for recent-x lookup
+
+What we kept:
+- the low-overhead one-kernel execution model
+- the banded-family assumption that each row stores a contiguous range of subdiagonal entries and the diagonal is the last entry
+
+The simplified kernel computes:
+- rowStart and rowEnd from CSR
+- diagonal directly from the last entry in the row
+- the first column in the band as row minus the number of off-diagonal entries
+- off-diagonal contributions using contiguous offsets, without the extra band-cache logic
+
+What happened
+Updated banded-family results:
+
+banded, n=1024:
+- Coalesced: 145.2253 ms
+- RowBucketed: 4.3947 ms
+- BandedAware: 3.6173 ms
+- cuSPARSE: 55.6879 ms
+
+banded, n=4096:
+- Coalesced: 13.1607 ms
+- RowBucketed: 14.4593 ms
+- BandedAware: 12.1775 ms
+- cuSPARSE: 55.5154 ms
+
+banded, n=16384:
+- Coalesced: 50.6430 ms
+- RowBucketed: 35.4938 ms
+- BandedAware: 33.6048 ms
+- cuSPARSE: 138.8366 ms
+
+banded, n=32768:
+- Coalesced: 65.3162 ms
+- RowBucketed: 63.5750 ms
+- BandedAware: 64.8090 ms
+- cuSPARSE: 284.6046 ms
+
+Interpretation
+- simplifying the kernel was the right move
+- BandedAware is now the best custom kernel at 1024, 4096, and 16384
+- at 32768, RowBucketed is still slightly ahead, but BandedAware is now very close
+- all of these strong custom kernels still beat cuSPARSE by a large margin on the tested banded family
+
+Current status for banded after simplification
+- the profile was correct: extra band-cache logic was hurting larger sizes
+- the simpler band-specialized kernel is a much better fit
+- BandedAware is now a strong final candidate for the banded family
+
+14. Chain family
+The last remaining family was chain.
+
+Initial chain-family sweep
+Representative results:
+
+chain, n=1024:
+- Coalesced: 150.8824 ms
+- RowBucketed: 1.9924 ms
+- BlockAware: 2.2367 ms
+- BandedAware: 3.2524 ms
+- cuSPARSE: 47.3323 ms
+
+chain, n=4096:
+- Coalesced: 14.5295 ms
+- RowBucketed: 4.5856 ms
+- BlockAware: 4.5560 ms
+- BandedAware: 12.1699 ms
+- cuSPARSE: 22.4504 ms
+
+chain, n=16384:
+- Coalesced: 50.3067 ms
+- RowBucketed: 14.1431 ms
+- BlockAware: 14.7653 ms
+- BandedAware: 32.5138 ms
+- cuSPARSE: 69.0081 ms
+
+chain, n=32768:
+- Coalesced: 64.5639 ms
+- RowBucketed: 23.3677 ms
+- BlockAware: 32.2476 ms
+- BandedAware: 73.3083 ms
+- cuSPARSE: 124.6729 ms
+
+Interpretation
+- RowBucketed is the best custom kernel on chain at most tested sizes
+- BlockAware is essentially tied with it at 4096, but not better overall
+- all of the broader aware-family kernels are a bad fit for chain
+- cuSPARSE loses badly on this family because there is very little useful parallelism to exploit
+
+Profiling chain at large size
+We profiled chain, n=32768 for:
+- RowBucketed
+- BlockAware
+- cuSPARSE
+
+Nsight Systems API summary:
+
+RowBucketed:
+- 1 cudaLaunchKernel
+- 1 cudaDeviceSynchronize
+- 5 cudaMemcpy
+- cudaLaunchKernel: about 3.15 ms
+- cudaDeviceSynchronize: about 38.21 ms
+
+BlockAware:
+- 1 cudaLaunchKernel
+- 1 cudaDeviceSynchronize
+- 5 cudaMemcpy
+- cudaLaunchKernel: about 2.52 ms
+- cudaDeviceSynchronize: about 32.49 ms
+
+cuSPARSE:
+- 10 cudaLaunchKernel
+- 1 cudaDeviceSynchronize
+- 1 cudaMemcpyAsync
+- cudaLaunchKernel: about 114.82 ms total
+- cudaDeviceSynchronize: about 47.40 ms
+
+What this means
+- chain is not launch-bound on our best custom kernels
+- chain is not suffering from the orchestration problems that motivated RandomAware, PowerLawAware, or the earlier LevelAware work
+- the family simply does not have much exploitable parallelism
+- so the winning strategy is the cheapest possible kernel body and the cheapest possible schedule
+
+Current status for chain
+- chain does not want a new aware kernel
+- RowBucketed is already the best final choice for this family
+- the main lesson is that for extremely narrow dependency structure, keeping the kernel simple is more important than adding more structure-aware machinery
+
+15. FamilyAware final adaptive kernel
+After working family by family, we built one top-level family-aware adaptive path.
+
+Goal:
+- inspect matrix structure on the host
+- classify the matrix into one of the synthetic family shapes we studied
+- dispatch directly to the best family-specific kernel
+
+Final mapping used by the selector:
+- random -> RandomAware
+- banded -> BandedAware
+- chain -> RowBucketed
+- wide-level -> RandomAware
+- block -> RowBucketed
+- power-law -> PowerLawAware
+
+What changed during classifier tuning
+The first classifier version was too expensive and too inaccurate:
+- it reused heavy analysis such as level computation and multi-size block analysis
+- that made the FamilyAware timings much worse than the chosen kernel timings
+- it also misclassified some block and power-law cases
+
+We then simplified the classifier:
+- use cheap row statistics:
+  - average row nnz
+  - coefficient of variation of row nnz
+  - max row nnz
+  - bandwidth
+- add one cheap row-contiguity feature:
+  - adjacentFrac, the fraction of consecutive off-diagonal entries within rows
+
+Why adjacentFrac helped:
+- random had very low adjacentFrac
+- block had moderate adjacentFrac because of clustered patches
+- wide-level had very high adjacentFrac, but very low row-nnz variance
+- this gave a cheap way to separate random, block, and wide-level without expensive block simulation
+
+What happened
+Representative final FamilyAware results:
+
+random:
+- n=1024: FamilyAware 3.4845 ms, cuSPARSE 20.9054 ms
+- n=4096: FamilyAware 4.2312 ms, cuSPARSE 3.6475 ms
+- n=16384: FamilyAware 17.2584 ms, cuSPARSE 13.6078 ms
+- n=32768: FamilyAware 56.3866 ms, cuSPARSE 90.6872 ms
+
+banded:
+- n=1024: FamilyAware 2.8084 ms, cuSPARSE 10.5083 ms
+- n=4096: FamilyAware 9.3715 ms, cuSPARSE 38.0380 ms
+- n=16384: FamilyAware 35.4111 ms, cuSPARSE 143.5903 ms
+- n=32768: FamilyAware 69.2648 ms, cuSPARSE 289.6423 ms
+
+chain:
+- n=1024: FamilyAware 1.3081 ms, cuSPARSE 4.7939 ms
+- n=4096: FamilyAware 2.9393 ms, cuSPARSE 16.4053 ms
+- n=16384: FamilyAware 11.4819 ms, cuSPARSE 58.2682 ms
+- n=32768: FamilyAware 20.8916 ms, cuSPARSE 119.8253 ms
+
+wide-level:
+- n=1024: FamilyAware 2.6294 ms, cuSPARSE 2.8632 ms
+- n=4096: FamilyAware 2.0430 ms, cuSPARSE 11.5259 ms
+- n=16384: FamilyAware 5.2695 ms, cuSPARSE 48.5729 ms
+- n=32768: FamilyAware 7.0818 ms, cuSPARSE 99.4067 ms
+
+block:
+- n=1024: FamilyAware 2.5961 ms, cuSPARSE 3.3613 ms
+- n=4096: FamilyAware 8.4790 ms, cuSPARSE 14.5399 ms
+- n=16384: FamilyAware 38.4802 ms, cuSPARSE 68.3690 ms
+- n=32768: FamilyAware 98.5811 ms, cuSPARSE 168.3502 ms
+
+power-law:
+- n=1024: FamilyAware 1.1567 ms, cuSPARSE 1.6533 ms
+- n=4096: FamilyAware 2.0390 ms, cuSPARSE 1.3852 ms
+- n=16384: FamilyAware 2.4794 ms, cuSPARSE 1.9532 ms
+- n=32768: FamilyAware 4.2383 ms, cuSPARSE 2.6645 ms
+
+Interpretation
+- FamilyAware is now using the intended final family-specific kernels
+- it beats cuSPARSE across:
+  - banded
+  - chain
+  - wide-level
+  - block
+- it also beats cuSPARSE on the smallest and largest tested random cases
+- it does not yet beat cuSPARSE on the mid-sized random cases
+- it still trails cuSPARSE on power-law, although it is much stronger than the earlier generic adaptive attempts
+
+Final conclusion
+- the family-aware adaptive design worked
+- it turned the family-by-family tuning into one dispatch path
+- it does not beat cuSPARSE literally everywhere
+- but it now gives one coherent custom solver that wins on most of the structured synthetic families we studied
+
+Test GPU follow-up: LowRowNnz on real matrices
+
+We added a dedicated `LowRowNnz` path in `Test GPU` for apache-like real matrices with:
+- low average row nnz
+- low row-nnz variance
+- no strong banded adjacency
+
+Selector behavior after wiring it in:
+- `apache1 -> LowRowNnz`
+- `LFAT5000 -> RegularAware`
+
+Isolated apache1 timing:
+- `LowRowNnz`: about `445.3 ms`
+- `cuSPARSE`: about `395.2 ms`
+
+Nsight result for `apache1`:
+- `LowRowNnz`
+  - `1` `cudaLaunchKernel`
+  - `1` `cudaDeviceSynchronize`
+  - `5` `cudaMalloc`
+- `cuSPARSE`
+  - `10` `cudaLaunchKernel`
+  - `1` `cudaDeviceSynchronize`
+
+Interpretation:
+- `apache1` is not losing because of launch fragmentation anymore.
+- The current `LowRowNnz` path is already coarse and simple.
+- The remaining gap is mostly kernel-body efficiency, not scheduling.
+- So apache-like matrices now look like their own real family, but they need a stronger low-row-nnz execution kernel rather than another selector tweak.
+
+Test GPU follow-up: fixed-width tiny-row microkernels
+
+We tried replacing the generic low-row warp kernel with two fixed-width microkernels:
+- `<= 4` entries
+- `<= 8` entries
+
+Goal:
+- reduce shuffle/reduction overhead for apache-like rows
+
+Result on apache1:
+- new `LowRowNnz`: about `571.2 ms`
+- `LearnedAware`: about `572.2 ms`
+- `cuSPARSE`: about `319.3 ms`
+
+Conclusion:
+- this microkernel attempt regressed badly
+- so sub-warp specialization in this simple form was not the right fix
+- the apache-like problem still appears to need a better low-row-nnz kernel body, but not this version
+
+GPU New sync-back from Test GPU
+
+We ported the stable selector-side improvement from `Test GPU` into `GPU New`:
+- added a `RegularAware` path
+- updated `chooseFamilyKernel(...)` so:
+  - strongly narrow-banded matrices can route to `RegularAware`
+  - low-row-nnz low-variance regular matrices can route to `RegularAware`
+
+Important boundary:
+- we did not port the later failed `LowRowNnz` fixed-width microkernel experiment into
+  `GPU New`
+- so `GPU New` only received the stable selector/dispatch improvement, not the regressed
+  apache-specific microkernel variant
+
+Why this matters:
+- `LFAT5000`-style narrow real matrices benefited from the stable `RegularAware` routing
+  in `Test GPU`
+- the later apache-specific tiny-row microkernel regressed, so it was intentionally kept
+  out of the main `GPU New` code path
+
+GPU New sync-back: LearnedAware perceptron selector
+
+We also ported the perceptron-based selector from `Test GPU` into `GPU New`:
+- added `learned_selector_weights.h`
+- added learned feature extraction
+- added `chooseLearnedKernel(...)`
+- added `sptrsvGpuLearnedAware(...)`
+- exposed `LearnedAware` in:
+  - real matrix sweep output
+  - family sweep output
+  - one-shot modes
+  - main benchmark mode
+
+Important choice:
+- we synced the learned selector itself
+- but we still kept the failed apache-specific `LowRowNnz` microkernel experiment out of
+  `GPU New`
+
+So `GPU New` now has:
+- `FamilyAware` for the hand-written selector path
+- `LearnedAware` for the perceptron selector path
+- both on top of the stable kernel set only
+
+GPU New sync-back: successful benchmark workflow pieces
+
+We also synced the stable benchmarking workflow from `Test GPU` into `GPU New`:
+- expanded `makeRealMatrixCases()` to include the curated extra real matrices from
+  `Test Matrices/more`
+- added `real-one` mode so individual real matrices can be inspected and timed directly
+- exposed learned-selector output in the real sweep, family sweep, and one-shot modes
+
+Net result:
+- `GPU New` now contains the successful selector and benchmarking improvements from
+  `Test GPU`
+- the intentionally excluded pieces are still the failed apache-specific microkernel
+  experiments
+
+Timing fix
+
+We also fixed the negative-time glitch seen in some long real-matrix runs:
+- root cause: `timeMs(...)` was using `std::chrono::high_resolution_clock`
+- on this platform that clock is not guaranteed to be monotonic
+- so host-side elapsed time could become nonsensical if the clock source jumped
+
+Fix:
+- switched benchmark timing to `std::chrono::steady_clock`
+
+Why this is the right fix:
+- `steady_clock` is monotonic
+- it is the correct host clock for elapsed-time measurement
+- this removes bogus negative wall-clock timings without changing solver behavior
+
+GPU sync-back from GPU Test: stable non-perceptron improvements
+
+We ported the stable non-perceptron improvements from `GPU Test` into the main `GPU`
+tree, while intentionally leaving the retrained perceptron weights out so the main
+selector does not drift toward overfit behavior.
+
+What was synced:
+- `BandedAware` kernel correctness fix:
+  - the kernel now uses real `colIdx` values instead of reconstructing a synthetic
+    contiguous band
+  - diagonal detection is now based on `col == row`
+- `BandedAware` host-side redesign:
+  - `sptrsvGpuBandedAware(...)` now routes through safer general kernels
+  - high-adjacency narrow-band cases use `Coalesced`
+  - other banded cases use `RowBucketed`
+- persistent solve-only support for fair steady-state benchmarking:
+  - `RandomAware`
+  - `PowerLawAware`
+  - `RegularAware`
+  - `Coalesced`
+  - `RowBucketed`
+  - `BandedAware` via the new routed path
+  - `cuSPARSE`
+- `PowerLawAware` persistent superlevel batching:
+  - batches multiple small levels before synchronizing
+  - reduces the worst per-level sync overhead seen in graph-like real matrices
+
+Important boundary:
+- we did not port the retrained learned-selector weights from `GPU Test`
+- we did not port the mixed `RandomAware` batching experiment that helped some matrices
+  but regressed others
+
+The main `GPU` tree therefore gained:
+- the correctness-safe banded redesign
+- the fair persistent solve-only benchmarking path
+- the stable power-law batching improvement
+
+but it did not inherit:
+- the overfit-prone selector retrain
+- the unstable random batching experiment

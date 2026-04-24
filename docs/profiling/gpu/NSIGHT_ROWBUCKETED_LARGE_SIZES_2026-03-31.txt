@@ -1,0 +1,84 @@
+Nsight follow-up for larger-size RowBucketed behavior
+Date: 2026-03-31
+Tool: Nsight Systems (nsys)
+
+Context
+- The old AdaptiveRow implementation launched one kernel per row.
+- Earlier profiling showed that design was launch-bound:
+  - n = 8192: 32780 cudaLaunchKernel calls
+  - n = 32768: 131084 cudaLaunchKernel calls
+- RowBucketed was introduced to cut that launch count by grouping contiguous rows of the same bucket type into single launches.
+
+Profiles captured
+- profiling/rowbucketed_16384.nsys-rep
+- profiling/rowbucketed_16384_stats.txt
+- profiling/rowbucketed_32768.nsys-rep
+- profiling/rowbucketed_32768_stats.txt
+- profiling/cusparse_16384.nsys-rep
+- profiling/cusparse_16384_stats.txt
+
+Important note
+- Isolated single-mode timing in this environment is noisy because first-use CUDA initialization/setup becomes a large part of the run.
+- The most reliable information here is the CUDA API behavior, especially launch counts, sync time, and allocation overhead.
+
+Key findings
+1. RowBucketed dramatically reduced launch count versus old AdaptiveRow.
+- Old AdaptiveRow:
+  - n = 8192: 32780 launches
+  - n = 32768: 131084 launches
+- RowBucketed:
+  - n = 16384: 841 launches
+  - n = 32768: 841 launches
+
+This confirms that bucketed contiguous segments largely fixed the original launch storm.
+
+2. After bucketing, launch overhead is no longer the main bottleneck.
+- RowBucketed n = 16384:
+  - cudaLaunchKernel: 841 calls, 7.94 ms
+  - cudaDeviceSynchronize: 38.61 ms
+- RowBucketed n = 32768:
+  - cudaLaunchKernel: 841 calls, 8.71 ms
+  - cudaDeviceSynchronize: 92.11 ms
+
+Interpretation:
+- The launches are now cheap enough that the remaining gap is mostly device execution time plus synchronization waiting for those kernels to finish.
+
+3. cuSPARSE still uses much fewer launches.
+- cuSPARSE n = 16384:
+  - cudaLaunchKernel: 10 calls, 16.17 ms
+  - cudaDeviceSynchronize: 0.93 ms
+
+Even allowing for WSL noise, cuSPARSE clearly uses a much smaller number of launches and a more efficient global execution strategy.
+
+What this means
+- Bucketing solved the first big problem: too many tiny launches.
+- The next bottleneck is the execution model inside RowBucketed:
+  - kernels still process row ranges sequentially inside each launch
+  - there is still limited matrix-wide parallelism compared with cuSPARSE
+
+Recommended next improvements
+1. Reuse allocations across runs.
+- cudaMalloc is still expensive in isolated runs.
+- Keep device buffers alive across solves instead of reallocating every call.
+
+2. Precompute and reuse bucket segments.
+- Build row segments once during setup.
+- Reuse them for repeated solves.
+
+3. Move from segment-serial kernels to bucket-list kernels.
+- Current RowBucketed kernels process contiguous row ranges sequentially.
+- Better approach:
+  - upload arrays of row IDs per bucket
+  - let many threads/warps/blocks process many bucket rows in parallel
+  - preserve dependencies by grouping rows by safe frontiers or levels, not just raw bucket type
+
+4. Combine bucketing with dependency-aware frontiers.
+- The main remaining weakness is still lack of global sparse-triangular scheduling.
+- A stronger design would be:
+  - dependency frontier / level chunk
+  - inside each frontier, bucket rows into thread/warp/block kernels
+
+Bottom line
+- RowBucketed fixed the old launch-heavy AdaptiveRow problem.
+- At larger sizes, the remaining gap to cuSPARSE is no longer mostly launch overhead.
+- The next step is to improve matrix-wide parallel execution, not just row-shape selection.

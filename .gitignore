@@ -1,0 +1,44 @@
+# Matrix Market data files (too large for GitHub)
+*.mtx
+*.mtx.gz
+*.tar.gz
+*.tar
+*.rb
+
+# Build artifacts
+*.o
+*.obj
+*.exe
+*.out
+*.exp
+*.lib
+*.dll
+*.so
+*.dylib
+build/
+bin/
+
+# CUDA
+*.i
+*.ii
+*.gpu
+*.cubin
+*.fatbin
+*.ptx
+*.cudafe*
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
